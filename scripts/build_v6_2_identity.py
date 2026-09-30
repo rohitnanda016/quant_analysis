@@ -34,7 +34,7 @@ for _,r in sm.iterrows():
 
 mem["canonical_symbol"]=mem.symbol
 for _,r in sm.iterrows():
-    mask=(mem.symbol==r.old_symbol)&(mem.valid_from>=r.effective_from)
+    mask=(mem.symbol==r.old_symbol)
     mem.loc[mask,"canonical_symbol"]=r.new_symbol
 
 prices.to_csv(out/"prices_with_canonical_symbol.csv",index=False)
