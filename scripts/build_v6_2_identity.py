@@ -23,19 +23,33 @@ sm.old_symbol=sm.old_symbol.str.upper(); sm.new_symbol=sm.new_symbol.str.upper()
 sm.effective_from=pd.to_datetime(sm.effective_from)
 sm.effective_to=pd.to_datetime(sm.effective_to,errors="coerce")
 
-prices["canonical_symbol"]=prices.symbol
+# Canonical identity is the terminal symbol in the verified rename lineage.
+# NSE may return the post-rename symbol even when queried with the historical
+# acquisition symbol, so canonicalization uses requested_symbol when available.
+rename_map = dict(zip(sm.old_symbol, sm.new_symbol))
+
+def terminal_symbol(symbol):
+    symbol = str(symbol).strip().upper()
+    seen = set()
+    while symbol in rename_map and symbol not in seen:
+        seen.add(symbol)
+        symbol = rename_map[symbol]
+    return symbol
+
+if "requested_symbol" in prices.columns:
+    prices["canonical_symbol"] = prices["requested_symbol"].map(terminal_symbol)
+else:
+    prices["canonical_symbol"] = prices["symbol"].map(terminal_symbol)
+
 results=[]
 for _,r in sm.iterrows():
-    mask=(prices.symbol==r.old_symbol)&(prices.date>=r.effective_from)
-    if pd.notna(r.effective_to): mask &= prices.date<=r.effective_to
-    n=int(mask.sum())
-    prices.loc[mask,"canonical_symbol"]=r.new_symbol
-    results.append({"old_symbol":r.old_symbol,"new_symbol":r.new_symbol,"rows_remapped":n})
+    if "requested_symbol" in prices.columns:
+        n=int((prices["requested_symbol"].astype(str).str.upper()==r.old_symbol).sum())
+    else:
+        n=int((prices["symbol"].astype(str).str.upper()==r.old_symbol).sum())
+    results.append({"old_symbol":r.old_symbol,"new_symbol":r.new_symbol,"rows_attributed":n})
 
-mem["canonical_symbol"]=mem.symbol
-for _,r in sm.iterrows():
-    mask=(mem.symbol==r.old_symbol)
-    mem.loc[mask,"canonical_symbol"]=r.new_symbol
+mem["canonical_symbol"]=mem.symbol.map(terminal_symbol)
 
 prices.to_csv(out/"prices_with_canonical_symbol.csv",index=False)
 mem.to_csv(out/"membership_with_canonical_symbol.csv",index=False)
