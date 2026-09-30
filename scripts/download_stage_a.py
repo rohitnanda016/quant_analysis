@@ -24,7 +24,8 @@ a=p.parse_args(); start=pd.Timestamp(a.start); end=pd.Timestamp(a.end)
 sm=pd.read_csv(a.symbol_map); sm["old_symbol"]=sm.old_symbol.astype(str).str.strip().str.upper(); sm["new_symbol"]=sm.new_symbol.astype(str).str.strip().str.upper()
 fallback={r.old_symbol:r.new_symbol for _,r in sm.iterrows()}
 m=pd.read_csv(a.membership); m.columns=[str(c).strip().lower().replace(" ","_") for c in m.columns]; m.symbol=m.symbol.astype(str).str.strip().str.upper(); m.valid_from=pd.to_datetime(m.valid_from,errors="coerce"); m.valid_to=pd.to_datetime(m.valid_to,errors="coerce").fillna(end)
-syms=sorted(m.loc[(m.valid_from<=end)&(m.valid_to>=start),"symbol"].unique())
+acq_col="acquisition_symbol" if "acquisition_symbol" in m.columns else "symbol"
+syms=sorted(m.loc[(m.valid_from<=end)&(m.valid_to>=start),acq_col].dropna().astype(str).str.upper().unique())
 s=requests.Session(); s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"*/*","Referer":"https://www.nseindia.com/"}); s.get("https://www.nseindia.com/report-detail/eq_security",timeout=30)
 parts=[]; failures=[]
 for i,sym in enumerate(syms,1):
