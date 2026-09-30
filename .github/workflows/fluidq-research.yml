@@ -103,3 +103,5 @@ jobs:
 # Pipeline trigger: historical symbol fallback acquisition fix.
 
 # Trigger: historical acquisition symbol pipeline.
+
+# Manual trigger nudge: 2026-09-30 repair run
