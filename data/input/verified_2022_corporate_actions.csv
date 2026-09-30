@@ -1,0 +1,13 @@
+symbol,ex_date,factor,action,source
+SAREGAMA,2022-04-26,10.0,split 10:1,Trendlyne/ET
+TATASTEEL,2022-07-28,10.0,split 10:1,Tata Steel/NSE
+JUBLFOOD,2022-04-19,5.0,split 5:1,ET/Trendlyne
+SCHAEFFLER,2022-02-08,5.0,split 5:1,ET/Trendlyne
+VTL,2022-03-24,5.0,split 5:1,InCred
+BSE,2022-03-21,3.0,split 3:1,EODData
+GMMPFAUDLR,2022-07-11,3.0,bonus 2:1,Trendlyne/NSE
+HGS,2022-02-22,2.0,bonus 1:1,Moneycontrol/Trendlyne
+INFIBEAM,2022-03-14,2.0,split 2:1,CompaniesMarketCap
+IPCALAB,2022-01-10,2.0,split 2:1,Business Standard/Trendlyne
+AUBANK,2022-06-09,2.0,bonus 1:1,Trendlyne
+TORNTPHARM,2022-07-08,2.0,bonus 1:1,Trendlyne
