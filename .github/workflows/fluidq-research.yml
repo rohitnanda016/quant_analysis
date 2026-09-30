@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: pip install pandas requests
       - name: Prepare membership
-        if: ${{ inputs.stage == 'stage-a' }}
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
           mkdir -p data/input data/raw results/latest
           curl -L --fail --retry 4 https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/main/index_history/data/index_membership_history.csv -o data/input/membership_full.csv
@@ -51,7 +51,7 @@ jobs:
       - name: Download Stage-A NSE prices
         if: ${{ inputs.stage == 'stage-a' }}
         run: |
-          python scripts/download_stage_a.py --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
+          python scripts/download_stage_a.py --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
       - name: Build V6.2 identity
         run: |
           python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
