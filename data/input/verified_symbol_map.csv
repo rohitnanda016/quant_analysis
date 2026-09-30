@@ -1,2 +1,20 @@
 old_symbol,new_symbol,effective_from,effective_to,reason,source
 ADANITRANS,ADANIENSOL,2023-08-24,,NSE symbol/name change,NSE/CML/58016
+IIFLWAM,360ONE,2023-01-23,,NSE symbol/name change,NSE/CML/55278
+TATAMOTORS,TMPV,2025-10-24,,NSE symbol/name change,NSE/CML/70875
+MINDAIND,UNOMINDA,2022-08-05,,NSE symbol/name change,UNO-MINDA/2022
+MCDOWELL-N,UNITDSPR,2024-06-07,,NSE symbol/name change,NSE/United-Spirits/2024
+IBULHSGFIN,SAMMAANCAP,2024-07-26,,NSE symbol/name change,NSE/Sammaan/2024
+SRTRANSFIN,SHRIRAMFIN,2022-12-20,,NSE symbol/name change,NSE/CML/54812
+SUVENPHAR,COHANCE,2025-05-19,,NSE symbol/name change,NSE/Cohance/2025
+HBLPOWER,HBLENGINE,2024-12-23,,NSE symbol/name change,NSE/CML/65633
+GET&D,GVT&D,2024-11-05,,NSE symbol/name change,NSE/GETD/2024
+AMARAJABAT,ARE&M,2023-10-27,,NSE symbol/name change,NSE/CML/59037
+ZOMATO,ETERNAL,2025-04-09,,NSE symbol/name change,NSE/Zomato/2025
+MAHINDCIE,CIEINDIA,2023-06-19,,NSE symbol/name change,NSE/Mahindra-CIE/2023
+WELSPUNIND,WELSPUNLIV,2023-12-14,,NSE symbol/name change,NSE/Welspun/2023
+SWANENERGY,SWANCORP,2025-09-04,,NSE symbol/name change,NSE/CML/69907
+AKZOINDIA,JSWDULUX,2026-04-15,,NSE symbol/name change,NSE/JSWDulux/2026
+RBA,BURGERKING,2022-02-17,,historical symbol before NSE rename,NSE/CML/51298
+ZYDUSLIFE,CADILAHC,2022-03-07,,historical symbol before NSE rename,NSE/CMPT/51516
+PCBL,PHILIPCARB,2022-01-13,,historical symbol before NSE rename,NSE/LIST/405
