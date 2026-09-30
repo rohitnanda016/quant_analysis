@@ -60,7 +60,9 @@ def main():
             rr["valid_from"] = seg_start
             rr["valid_to"] = seg_end
             rr["source_symbol"] = r.symbol
+            rr["canonical_symbol"] = r.symbol
             rr["symbol"] = historical_symbol(r.symbol, seg_start, changes)
+            rr["acquisition_symbol"] = rr["symbol"]
             out.append(rr)
 
     y = pd.DataFrame(out).drop_duplicates()
@@ -70,6 +72,7 @@ def main():
     changed = y[y.symbol != y.source_symbol]
     print("membership_rows", len(y))
     print("historical_symbols", y.symbol.nunique())
+    print("acquisition_symbols", y.acquisition_symbol.nunique())
     print("remapped_rows", len(changed))
     print("remapped_symbols", changed.source_symbol.nunique())
     if len(changed):
