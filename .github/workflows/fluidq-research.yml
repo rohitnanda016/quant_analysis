@@ -54,8 +54,8 @@ jobs:
           python scripts/build_historical_membership.py \
             --membership data/input/nifty500_membership_source.csv \
             --out data/input/nifty500_membership.csv \
-            --start "${{ inputs.start_date || '2022-01-03' }}" \
-            --end "${{ inputs.end_date || '2022-07-29' }}"
+            --start "${{ inputs.start_date || '2014-01-01' }}" \
+            --end "${{ inputs.end_date || '2026-08-31' }}"
       - name: Probe NSE historical symbol endpoints
         if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
@@ -112,7 +112,7 @@ jobs:
         run: |
           python - <<'PY'
           import json,os,subprocess
-          m={"stage":os.environ["STAGE"] or "full-history","start_date":os.environ["START_DATE"] or "2022-01-03","end_date":os.environ["END_DATE"] or "2022-07-29","git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
+          m={"stage":os.environ["STAGE"] or "full-history","start_date":os.environ["START_DATE"] or "2014-01-01","end_date":os.environ["END_DATE"] or "2026-08-31","git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
           json.dump(m,open("results/latest/run_metadata.json","w"),indent=2)
           PY
         env:
