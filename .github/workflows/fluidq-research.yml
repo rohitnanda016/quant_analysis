@@ -4,21 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "Pipeline stage"
         required: true
-        default: "identity-audit"
+        default: stage-a
         type: choice
-        options:
-          - identity-audit
-          - stage-a-audit
+        options: [stage-a, identity-audit]
       start_date:
-        description: "Start date"
         required: true
-        default: "2022-01-03"
+        default: 2022-01-03
       end_date:
-        description: "End date"
         required: true
-        default: "2022-07-29"
+        default: 2022-07-29
 
 permissions:
   contents: write
@@ -26,48 +21,57 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
+        run: pip install pandas requests
+      - name: Prepare membership
+        if: ${{ inputs.stage == 'stage-a' }}
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pandas
-      - name: Validate repository
+          mkdir -p data/input data/raw results/latest
+          curl -L --fail --retry 4 https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/main/index_history/data/index_membership_history.csv -o data/input/membership_full.csv
+          python - <<'PY'
+          import pandas as pd
+          x=pd.read_csv("data/input/membership_full.csv")
+          x.columns=[str(c).strip().lower().replace(" ","_") for c in x.columns]
+          x=x[x.index_name.astype(str).str.strip().str.lower()=="nifty 500"]
+          x.to_csv("data/input/nifty500_membership.csv",index=False)
+          print("rows",len(x),"symbols",x.symbol.nunique())
+          PY
+      - name: Download Stage-A NSE prices
+        if: ${{ inputs.stage == 'stage-a' }}
         run: |
-          test -f scripts/build_v6_2_identity.py
-          test -f scripts/audit_v6_2_gaps.py
-          test -f data/input/verified_symbol_map.csv
-      - name: Create result directory
-        run: mkdir -p results/latest
-      - name: Run identity/audit pipeline
+          python scripts/download_stage_a.py --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
+      - name: Build V6.2 identity
         run: |
-          if [ -f data/processed/prices_nifty500_raw.csv ] && [ -f data/input/nifty500_membership.csv ]; then
-            python scripts/build_v6_2_identity.py --prices data/processed/prices_nifty500_raw.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
-            python scripts/audit_v6_2_gaps.py --prices data/processed/v6_2/prices_with_canonical_symbol.csv --membership data/processed/v6_2/membership_with_canonical_symbol.csv --outdir results/latest
-          else
-            echo "Stage-A datasets are not committed; no data will be fabricated."
-          fi
-      - name: Write run metadata
+          python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
+      - name: Audit coverage
+        run: |
+          python scripts/audit_v6_2_gaps.py --prices data/processed/v6_2/prices_with_canonical_symbol.csv --membership data/processed/v6_2/membership_with_canonical_symbol.csv --outdir results/latest
+      - name: Metadata
         run: |
           python - <<'PY'
           import json,os,subprocess
-          m={"pipeline":"FLUID-Q Research Pipeline","stage":os.environ.get("INPUT_STAGE"),"start_date":os.environ.get("INPUT_START_DATE"),"end_date":os.environ.get("INPUT_END_DATE"),"git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ.get("GITHUB_RUN_ID")}
-          open("results/latest/run_metadata.json","w").write(json.dumps(m,indent=2))
+          m={"stage":os.environ["STAGE"],"start_date":os.environ["START_DATE"],"end_date":os.environ["END_DATE"],"git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
+          json.dump(m,open("results/latest/run_metadata.json","w"),indent=2)
           PY
-      - name: Upload results
-        uses: actions/upload-artifact@v4
+        env:
+          STAGE: ${{ inputs.stage }}
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
+      - uses: actions/upload-artifact@v4
         with:
-          name: fluidq-research-results
-          path: results/latest/
-          if-no-files-found: warn
+          name: fluidq-${{ inputs.stage }}-${{ github.run_id }}
+          path: |
+            data/raw/
+            data/processed/v6_2/
+            results/latest/
+          retention-days: 30
       - name: Commit compact results
         run: |
           git config user.name "github-actions[bot]"
