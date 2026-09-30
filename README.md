@@ -36,3 +36,8 @@ python scripts/audit_v6_2_gaps.py \
   --prices data/processed/v6_2/prices_with_canonical_symbol.csv \
   --membership data/processed/v6_2/membership_with_canonical_symbol.csv
 ```
+
+
+## Automated research
+
+The GitHub Actions workflow `.github/workflows/fluidq-research.yml` can be manually dispatched to validate the current V6.2 pipeline and publish compact results under `results/latest/` plus a workflow artifact. Raw datasets are intentionally kept out of Git history.
