@@ -91,3 +91,5 @@ jobs:
           if git diff --cached --quiet; then echo "No result changes"; else git commit -m "chore: update FLUID-Q research results"; git push; fi
 
 # Pipeline trigger: historical symbol fallback acquisition fix.
+
+# Trigger: historical acquisition symbol pipeline.
