@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/download_stage_a.py'
+      - 'scripts/probe_nse_symbols.py'
       - 'scripts/build_v6_2_identity.py'
       - 'scripts/build_historical_membership.py'
       - 'scripts/audit_v6_2_gaps.py'
@@ -54,6 +55,10 @@ jobs:
             --out data/input/nifty500_membership.csv \
             --start "${{ inputs.start_date || '2022-01-03' }}" \
             --end "${{ inputs.end_date || '2022-07-29' }}"
+      - name: Probe NSE historical symbol endpoints
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        run: |
+          python scripts/probe_nse_symbols.py --start 23-06-2022 --end 30-06-2022 --out results/latest/nse_symbol_probe.json
       - name: Download Stage-A NSE prices
         if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
