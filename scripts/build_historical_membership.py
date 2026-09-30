@@ -83,3 +83,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Pipeline trigger: historical membership identity validation.
