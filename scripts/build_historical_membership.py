@@ -3,18 +3,12 @@ from pathlib import Path
 import requests
 import pandas as pd
 
-SYMBOLCHANGE_URL = "https://nsearchives.nseindia.com/content/equities/symbolchange.csv"
 
-def load_symbol_changes():
-    r = requests.get(SYMBOLCHANGE_URL, timeout=30)
-    r.raise_for_status()
-    text = r.content.decode("utf-8-sig", errors="replace")
-    rows = []
-    for line in text.splitlines():
-        parts = [p.strip().strip('"') for p in line.split(",")]
-        if len(parts) >= 4:
-            rows.append(parts[:4])
-    x = pd.DataFrame(rows, columns=["name","old_symbol","new_symbol","date_of_change"])
+def load_symbol_changes(path="data/input/verified_symbol_map.csv"):
+    x = pd.read_csv(path)
+    x["old_symbol"] = x["old_symbol"].astype(str)
+    x["new_symbol"] = x["new_symbol"].astype(str)
+    x["date_of_change"] = pd.to_datetime(x["effective_from"], errors="coerce")
     x["old_symbol"] = x.old_symbol.str.upper().str.strip()
     x["new_symbol"] = x.new_symbol.str.upper().str.strip()
     x["date_of_change"] = pd.to_datetime(x.date_of_change, errors="coerce", dayfirst=True)
