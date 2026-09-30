@@ -1,26 +1,20 @@
 name: FLUID-Q Research Pipeline
 
 on:
-  push:
-    paths:
-      - 'scripts/download_stage_a.py'
-      - 'scripts/probe_nse_symbols.py'
-      - 'scripts/build_v6_2_identity.py'
-      - 'scripts/build_historical_membership.py'
-      - 'scripts/audit_v6_2_gaps.py'
-      - 'scripts/repair_flagged_gaps.py'
-      - '.github/workflows/fluidq-research.yml'
   workflow_dispatch:
     inputs:
       stage:
+        description: "Research stage"
         required: true
         default: full-history
         type: choice
         options: [full-history, stage-a, identity-audit]
       start_date:
+        description: "Start date (YYYY-MM-DD)"
         required: true
         default: 2014-01-01
       end_date:
+        description: "End date (YYYY-MM-DD)"
         required: true
         default: 2026-08-31
 
@@ -33,13 +27,48 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Validate run parameters
+        env:
+          STAGE: ${{ inputs.stage }}
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import date
+
+          stage = os.environ["STAGE"]
+          start = os.environ["START_DATE"]
+          end = os.environ["END_DATE"]
+
+          try:
+              start_d = date.fromisoformat(start)
+              end_d = date.fromisoformat(end)
+          except ValueError as e:
+              raise SystemExit(f"Invalid date; expected YYYY-MM-DD: {e}")
+
+          if start_d > end_d:
+              raise SystemExit(f"Start date {start} is after end date {end}")
+
+          if stage == "full-history":
+              if start != "2014-01-01" or end != "2026-08-31":
+                  raise SystemExit(
+                      "full-history must use exactly 2014-01-01 through 2026-08-31"
+                  )
+
+          print(f"RUN PARAMETERS: stage={stage}, start={start}, end={end}")
+          PY
+
       - name: Prepare historical membership
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
           mkdir -p data/input data/raw results/latest
           curl -L --fail --retry 4 https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/main/index_history/data/index_membership_history.csv -o data/input/membership_full.csv
@@ -54,20 +83,35 @@ jobs:
           python scripts/build_historical_membership.py \
             --membership data/input/nifty500_membership_source.csv \
             --out data/input/nifty500_membership.csv \
-            --start "${{ inputs.start_date || '2014-01-01' }}" \
-            --end "${{ inputs.end_date || '2026-08-31' }}"
+            --start "${{ inputs.start_date }}" \
+            --end "${{ inputs.end_date }}"
+
       - name: Probe NSE historical symbol endpoints
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
           python scripts/probe_nse_symbols.py --start 23-06-2022 --end 30-06-2022 --out results/latest/nse_symbol_probe.json
-      - name: Download Stage-A NSE prices
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
+
+      - name: Download NSE prices
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
-          python scripts/download_stage_a.py --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
+          echo "Downloading NSE prices for ${{ inputs.start_date }} through ${{ inputs.end_date }}"
+          python scripts/download_stage_a.py \
+            --start "${{ inputs.start_date }}" \
+            --end "${{ inputs.end_date }}" \
+            --membership data/input/nifty500_membership.csv \
+            --out data/raw/stage_a_prices.csv \
+            --sleep 1
+
       - name: Repair flagged historical gaps
         if: ${{ inputs.stage == 'stage-a' }}
         run: |
-          python scripts/repair_flagged_gaps.py --input data/raw/stage_a_prices.csv --output data/raw/stage_a_prices.csv --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --chunk-days 31 --sleep 0.5
+          python scripts/repair_flagged_gaps.py \
+            --input data/raw/stage_a_prices.csv \
+            --output data/raw/stage_a_prices.csv \
+            --start "${{ inputs.start_date }}" \
+            --end "${{ inputs.end_date }}" \
+            --chunk-days 31 --sleep 0.5
+
       - name: Repair remaining gaps from NSE daily bhavcopy
         if: ${{ inputs.stage == 'stage-a' }}
         run: |
@@ -102,40 +146,58 @@ jobs:
           x=x.drop_duplicates(['date','symbol']).sort_values(['date','symbol']); x.to_csv(path,index=False)
           print('daily bhavcopy rows added',len(add),'final rows',len(x),flush=True)
           PY
+
       - name: Build V6.2 identity
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
-          python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
+          python scripts/build_v6_2_identity.py \
+            --prices data/raw/stage_a_prices.csv \
+            --membership data/input/nifty500_membership.csv \
+            --symbol-map data/input/verified_symbol_map.csv
+
       - name: Audit coverage
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
-          python scripts/audit_v6_2_gaps.py --prices data/processed/v6_2/prices_with_canonical_symbol.csv --membership data/processed/v6_2/membership_with_canonical_symbol.csv --outdir results/latest
+          python scripts/audit_v6_2_gaps.py \
+            --prices data/processed/v6_2/prices_with_canonical_symbol.csv \
+            --membership data/processed/v6_2/membership_with_canonical_symbol.csv \
+            --outdir results/latest
+
       - name: Metadata
         run: |
           python - <<'PY'
           import json,os,subprocess
-          m={"stage":os.environ["STAGE"] or "full-history","start_date":os.environ["START_DATE"] or "2014-01-01","end_date":os.environ["END_DATE"] or "2026-08-31","git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
+          m={
+              "stage": os.environ["STAGE"],
+              "start_date": os.environ["START_DATE"],
+              "end_date": os.environ["END_DATE"],
+              "git_commit": subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),
+              "workflow_run": os.environ["GITHUB_RUN_ID"]
+          }
           json.dump(m,open("results/latest/run_metadata.json","w"),indent=2)
           PY
         env:
           STAGE: ${{ inputs.stage }}
           START_DATE: ${{ inputs.start_date }}
           END_DATE: ${{ inputs.end_date }}
+
       - uses: actions/upload-artifact@v4
         with:
-          name: fluidq-${{ inputs.stage || 'full-history' }}-${{ github.run_id }}
+          name: fluidq-${{ inputs.stage }}-${{ github.run_id }}
           path: |
             data/raw/
             data/processed/v6_2/
             results/latest/
           retention-days: 30
+
       - name: Commit compact results
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add results/latest/
-          if git diff --cached --quiet; then echo "No result changes"; else git commit -m "chore: update FLUID-Q research results"; git push; fi
-
-# Pipeline trigger: historical symbol fallback acquisition fix.
-
-# Trigger: historical acquisition symbol pipeline.
-
-# Manual trigger nudge: 2026-09-30 repair run
+          if git diff --cached --quiet; then
+            echo "No result changes"
+          else
+            git commit -m "chore: update FLUID-Q research results"
+            git push
+          fi
