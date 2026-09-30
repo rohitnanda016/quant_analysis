@@ -7,6 +7,7 @@ on:
       - 'scripts/build_v6_2_identity.py'
       - 'scripts/build_historical_membership.py'
       - 'scripts/audit_v6_2_gaps.py'
+      - '.github/workflows/fluidq-research.yml'
   workflow_dispatch:
     inputs:
       stage:
