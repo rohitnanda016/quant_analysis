@@ -19,3 +19,5 @@ for s,g in m.groupby("canonical_symbol"):
         rows.append([s,len(active),len(active&got),len(active-got),100*len(active&got)/len(active)])
 pd.DataFrame(rows,columns=["symbol","active_days","price_days","missing_days","coverage_pct"]).sort_values("coverage_pct").to_csv(out/"coverage_after_identity.csv",index=False)
 print(out/"coverage_after_identity.csv")
+
+# Pipeline trigger: rerun after verified historical symbol-map update.
