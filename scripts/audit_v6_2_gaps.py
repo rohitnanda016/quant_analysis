@@ -23,3 +23,5 @@ print(out/"coverage_after_identity.csv")
 # Pipeline trigger: rerun after verified historical symbol-map update.
 
 # Trigger identity pipeline after mapping correction.
+
+# Trigger after membership canonicalization fix.
