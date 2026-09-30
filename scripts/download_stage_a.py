@@ -37,4 +37,4 @@ Path(a.out).parent.mkdir(parents=True,exist_ok=True); x.to_csv(a.out,index=False
 Path(a.out).with_suffix(".audit.json").write_text(json.dumps({"start":a.start,"end":a.end,"symbols_requested":len(syms),"symbols_returned":int(x.symbol.nunique()) if len(x) else 0,"rows":len(x),"failed_symbols":failures},indent=2))
 print(json.dumps({"rows":len(x),"symbols":int(x.symbol.nunique()) if len(x) else 0,"failed_symbols":failures},indent=2))
 
-# Pipeline trigger: 2026-09-30
+# Pipeline trigger: 2026-09-30; workflow retry
