@@ -8,6 +8,7 @@ on:
       - 'scripts/build_v6_2_identity.py'
       - 'scripts/build_historical_membership.py'
       - 'scripts/audit_v6_2_gaps.py'
+      - 'scripts/repair_flagged_gaps.py'
       - '.github/workflows/fluidq-research.yml'
   workflow_dispatch:
     inputs:
@@ -63,6 +64,10 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
           python scripts/download_stage_a.py --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
+      - name: Repair flagged historical gaps
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        run: |
+          python scripts/repair_flagged_gaps.py --input data/raw/stage_a_prices.csv --output data/raw/stage_a_prices.csv --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --chunk-days 31 --sleep 0.5
       - name: Build V6.2 identity
         run: |
           python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
