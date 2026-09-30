@@ -37,7 +37,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install pandas requests
+        run: pip install -r requirements.txt
       - name: Prepare historical membership
         if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
@@ -68,6 +68,40 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
           python scripts/repair_flagged_gaps.py --input data/raw/stage_a_prices.csv --output data/raw/stage_a_prices.csv --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --chunk-days 31 --sleep 0.5
+      - name: Repair remaining gaps from NSE daily bhavcopy
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        run: |
+          python - <<'PY'
+          import io,time
+          import pandas as pd
+          from jugaad_data.nse import NSEArchives
+          path='data/raw/stage_a_prices.csv'
+          x=pd.read_csv(path,low_memory=False)
+          x['date']=pd.to_datetime(x['date'],errors='coerce')
+          x['symbol']=x['symbol'].astype(str).str.strip().str.upper()
+          targets={'ALOKINDS','JSWENERGY','FLUOROCHEM','TRIDENT','TTML','BCG','ATGL','ADANITRANS','ADANIENSOL','HAPPSTMNDS','SUPPETRO','CGPOWER','NAZARA'}
+          keys=set(zip(x.date,x.symbol)); add=[]; nse=NSEArchives()
+          for dt in sorted(x.date.dropna().unique()):
+              d=pd.Timestamp(dt); absent=targets-{s for dd,s in keys if dd==d}
+              if not absent: continue
+              try:
+                  raw=nse.bhavcopy_old_raw(d.to_pydatetime())
+                  if isinstance(raw,bytes): raw=raw.decode('utf-8-sig','replace')
+                  q=pd.read_csv(io.StringIO(raw)); q.columns=[' '.join(str(z).replace('\ufeff','').strip().strip(chr(34)).split()).upper() for z in q.columns]
+                  if 'SYMBOL' not in q.columns: continue
+                  q['SYMBOL']=q['SYMBOL'].astype(str).str.strip().str.upper(); q=q[q.SYMBOL.isin(absent)].copy()
+                  if len(q):
+                      q=q.rename(columns={'SYMBOL':'symbol','SERIES':'series','OPEN':'open','HIGH':'high','LOW':'low','LAST':'last','CLOSE':'close','PREV_CLOSE':'prev_close','TOTTRDQTY':'volume','TOTTRDVAL':'traded_value'}); q['date']=d; q['requested_symbol']=q['symbol']; q['repair_source']='nse_daily_bhavcopy'; add.append(q)
+              except Exception as e: print('bhavcopy error',d.date(),e,flush=True)
+              time.sleep(.35)
+          if add:
+              a=pd.concat(add,ignore_index=True).drop_duplicates(['date','symbol']); a=a[[ (r.date,r.symbol) not in keys for _,r in a.iterrows() ]]
+              for col in x.columns:
+                  if col not in a.columns: a[col]=pd.NA
+              x=pd.concat([x,a[x.columns]],ignore_index=True)
+          x=x.drop_duplicates(['date','symbol']).sort_values(['date','symbol']); x.to_csv(path,index=False)
+          print('daily bhavcopy rows added',len(add),'final rows',len(x),flush=True)
+          PY
       - name: Build V6.2 identity
         run: |
           python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
