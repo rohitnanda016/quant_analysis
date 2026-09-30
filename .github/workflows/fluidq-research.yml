@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/download_stage_a.py'
       - 'scripts/build_v6_2_identity.py'
+      - 'scripts/build_historical_membership.py'
       - 'scripts/audit_v6_2_gaps.py'
   workflow_dispatch:
     inputs:
@@ -32,10 +33,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
       - name: Install dependencies
         run: pip install pandas requests
-      - name: Prepare membership
+      - name: Prepare historical membership
         if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
           mkdir -p data/input data/raw results/latest
@@ -45,11 +45,16 @@ jobs:
           x=pd.read_csv("data/input/membership_full.csv")
           x.columns=[str(c).strip().lower().replace(" ","_") for c in x.columns]
           x=x[x.index_name.astype(str).str.strip().str.lower()=="nifty 500"]
-          x.to_csv("data/input/nifty500_membership.csv",index=False)
-          print("rows",len(x),"symbols",x.symbol.nunique())
+          x.to_csv("data/input/nifty500_membership_source.csv",index=False)
+          print("source rows",len(x),"source symbols",x.symbol.nunique())
           PY
+          python scripts/build_historical_membership.py \
+            --membership data/input/nifty500_membership_source.csv \
+            --out data/input/nifty500_membership.csv \
+            --start "${{ inputs.start_date || '2022-01-03' }}" \
+            --end "${{ inputs.end_date || '2022-07-29' }}"
       - name: Download Stage-A NSE prices
-        if: ${{ inputs.stage == 'stage-a' }}
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
         run: |
           python scripts/download_stage_a.py --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
       - name: Build V6.2 identity
@@ -62,7 +67,7 @@ jobs:
         run: |
           python - <<'PY'
           import json,os,subprocess
-          m={"stage":os.environ["STAGE"],"start_date":os.environ["START_DATE"],"end_date":os.environ["END_DATE"],"git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
+          m={"stage":os.environ["STAGE"] or "stage-a","start_date":os.environ["START_DATE"] or "2022-01-03","end_date":os.environ["END_DATE"] or "2022-07-29","git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
           json.dump(m,open("results/latest/run_metadata.json","w"),indent=2)
           PY
         env:
@@ -71,7 +76,7 @@ jobs:
           END_DATE: ${{ inputs.end_date }}
       - uses: actions/upload-artifact@v4
         with:
-          name: fluidq-${{ inputs.stage }}-${{ github.run_id }}
+          name: fluidq-${{ inputs.stage || 'stage-a' }}-${{ github.run_id }}
           path: |
             data/raw/
             data/processed/v6_2/
