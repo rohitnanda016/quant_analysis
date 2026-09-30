@@ -1,0 +1,24 @@
+{
+  "stage": "stage-a",
+  "period": "2022-01-03 to 2022-07-29",
+  "raw_rows": 76763,
+  "symbols": 534,
+  "trading_dates": 144,
+  "coverage": {
+    "fully_covered_flagged_symbols": 11,
+    "remaining_membership_boundary_exception": "SUPPETRO"
+  },
+  "price_integrity": {
+    "missing_ohlc": 0,
+    "nonpositive_close": 0,
+    "ohlc_order_issues": 0,
+    "negative_volume": 0,
+    "negative_turnover": 0,
+    "duplicate_date_symbol": 0,
+    "extreme_returns_before_adjustment_gt_50pct": 12,
+    "extreme_returns_after_verified_corporate_action_adjustment_gt_50pct": 0
+  },
+  "verified_corporate_actions_applied": 12,
+  "adjusted_rows": 825,
+  "note": "Numeric fields were normalized from NSE comma-grouped strings before validation. Corporate-action adjustment is a research proxy pending complete NSE corporate-action history for the full 2014-2026 dataset."
+}
