@@ -62,3 +62,5 @@ for sym in SYMBOLS:
 Path(a.out).parent.mkdir(parents=True,exist_ok=True)
 Path(a.out).write_text(json.dumps({"start":a.start,"end":a.end,"results":results},indent=2))
 print(Path(a.out).read_text())
+
+# Trigger probe workflow after workflow-path update.
