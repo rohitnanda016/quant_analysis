@@ -24,7 +24,7 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -100,7 +100,7 @@ jobs:
             --end "${{ inputs.end_date }}" \
             --membership data/input/nifty500_membership.csv \
             --out data/raw/stage_a_prices.csv \
-            --sleep 1
+            --sleep 0.2 --chunk-days 365 --workers 6
 
       - name: Repair flagged historical gaps
         if: ${{ inputs.stage == 'stage-a' }}
