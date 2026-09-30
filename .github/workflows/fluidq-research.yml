@@ -14,15 +14,15 @@ on:
     inputs:
       stage:
         required: true
-        default: stage-a
+        default: full-history
         type: choice
-        options: [stage-a, identity-audit]
+        options: [full-history, stage-a, identity-audit]
       start_date:
         required: true
-        default: 2022-01-03
+        default: 2014-01-01
       end_date:
         required: true
-        default: 2022-07-29
+        default: 2026-08-31
 
 permissions:
   contents: write
@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Prepare historical membership
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
           mkdir -p data/input data/raw results/latest
           curl -L --fail --retry 4 https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/main/index_history/data/index_membership_history.csv -o data/input/membership_full.csv
@@ -57,19 +57,19 @@ jobs:
             --start "${{ inputs.start_date || '2022-01-03' }}" \
             --end "${{ inputs.end_date || '2022-07-29' }}"
       - name: Probe NSE historical symbol endpoints
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
           python scripts/probe_nse_symbols.py --start 23-06-2022 --end 30-06-2022 --out results/latest/nse_symbol_probe.json
       - name: Download Stage-A NSE prices
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
           python scripts/download_stage_a.py --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --membership data/input/nifty500_membership.csv --out data/raw/stage_a_prices.csv --sleep 1
       - name: Repair flagged historical gaps
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        if: ${{ inputs.stage == 'stage-a' }}
         run: |
           python scripts/repair_flagged_gaps.py --input data/raw/stage_a_prices.csv --output data/raw/stage_a_prices.csv --start "${{ inputs.start_date || '2022-01-03' }}" --end "${{ inputs.end_date || '2022-07-29' }}" --chunk-days 31 --sleep 0.5
       - name: Repair remaining gaps from NSE daily bhavcopy
-        if: ${{ github.event_name == 'push' || inputs.stage == 'stage-a' }}
+        if: ${{ inputs.stage == 'stage-a' }}
         run: |
           python - <<'PY'
           import io,time
@@ -112,7 +112,7 @@ jobs:
         run: |
           python - <<'PY'
           import json,os,subprocess
-          m={"stage":os.environ["STAGE"] or "stage-a","start_date":os.environ["START_DATE"] or "2022-01-03","end_date":os.environ["END_DATE"] or "2022-07-29","git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
+          m={"stage":os.environ["STAGE"] or "full-history","start_date":os.environ["START_DATE"] or "2022-01-03","end_date":os.environ["END_DATE"] or "2022-07-29","git_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"workflow_run":os.environ["GITHUB_RUN_ID"]}
           json.dump(m,open("results/latest/run_metadata.json","w"),indent=2)
           PY
         env:
@@ -121,7 +121,7 @@ jobs:
           END_DATE: ${{ inputs.end_date }}
       - uses: actions/upload-artifact@v4
         with:
-          name: fluidq-${{ inputs.stage || 'stage-a' }}-${{ github.run_id }}
+          name: fluidq-${{ inputs.stage || 'full-history' }}-${{ github.run_id }}
           path: |
             data/raw/
             data/processed/v6_2/
