@@ -1,6 +1,11 @@
 name: FLUID-Q Research Pipeline
 
 on:
+  push:
+    paths:
+      - 'scripts/download_stage_a.py'
+      - 'scripts/build_v6_2_identity.py'
+      - 'scripts/audit_v6_2_gaps.py'
   workflow_dispatch:
     inputs:
       stage:
