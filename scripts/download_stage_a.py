@@ -1,23 +1,37 @@
 import argparse,io,time,json
 from pathlib import Path
 import requests,pandas as pd
-URL="https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData"
+URLS=[
+ "https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData",
+ "https://www.nseindia.com/api/historical/securityArchives"
+]
 MEM="data/input/nifty500_membership.csv"
 def cc(c):
  c=str(c).replace("\ufeff","").replace("\xa0"," ").strip().strip('"'); return " ".join(c.split()).lower()
 def get(s,sym,a,b):
- p={"symbol":sym,"from":a.strftime("%d-%m-%Y"),"to":b.strftime("%d-%m-%Y"),"series":"EQ","type":"priceVolumeDeliverable","csv":"true"}
- for i in range(4):
-  try:
-   r=s.get(URL,params=p,timeout=45)
-   if r.status_code==200 and len(r.content)>100:
-    d=pd.read_csv(io.StringIO(r.content.decode("utf-8-sig",errors="replace")),skipinitialspace=True)
-    d.columns=[cc(x) for x in d.columns]
-    mp={"prev close":"prev_close","open price":"open","high price":"high","low price":"low","last price":"last","close price":"close","average price":"vwap","total traded quantity":"volume","turnover":"traded_value","no. of trades":"num_trades","deliverable qty":"deliverable_qty","% dly qt to traded qty":"deliverable_pct"}
-    d=d.rename(columns=mp); d["date"]=pd.to_datetime(d["date"],errors="coerce",dayfirst=True); d["symbol"]=d["symbol"].astype(str).str.strip().str.upper()
-    return d
-  except Exception: pass
-  time.sleep(2**i)
+ p={"symbol":sym,"from":a.strftime("%d-%m-%Y"),"to":b.strftime("%d-%m-%Y"),"series":"EQ","type":"priceVolumeDeliverable","csv":"true","dataType":"priceVolumeDeliverable"}
+ mp={"prev close":"prev_close","open price":"open","high price":"high","low price":"low","last price":"last","close price":"close","average price":"vwap","total traded quantity":"volume","turnover":"traded_value","no. of trades":"num_trades","deliverable qty":"deliverable_qty","% dly qt to traded qty":"deliverable_pct","deliverableqty":"deliverable_qty"}
+ for url in URLS:
+  for i in range(3):
+   try:
+    r=s.get(url,params=p,timeout=45)
+    if r.status_code==200 and len(r.content)>100:
+     raw=r.content.decode("utf-8-sig",errors="replace")
+     try:
+      d=pd.read_csv(io.StringIO(raw),skipinitialspace=True)
+     except Exception:
+      obj=r.json(); rows=obj.get("data",obj) if isinstance(obj,dict) else obj
+      d=pd.DataFrame(rows)
+     if d.empty: break
+     d.columns=[cc(x) for x in d.columns]
+     d=d.rename(columns=mp)
+     if "date" not in d.columns or "close" not in d.columns: break
+     d["date"]=pd.to_datetime(d["date"],errors="coerce",dayfirst=True)
+     d["symbol"]=d["symbol"].astype(str).str.strip().str.upper()
+     d["source_endpoint"]=url
+     return d
+   except Exception: pass
+   time.sleep(2**i)
  return pd.DataFrame()
 p=argparse.ArgumentParser(); p.add_argument("--start",required=True); p.add_argument("--end",required=True); p.add_argument("--membership",default=MEM); p.add_argument("--symbol-map",default="data/input/verified_symbol_map.csv"); p.add_argument("--out",default="data/raw/stage_a_prices.csv"); p.add_argument("--sleep",type=float,default=1.0)
 a=p.parse_args(); start=pd.Timestamp(a.start); end=pd.Timestamp(a.end)
