@@ -85,8 +85,34 @@ amap = aliases(a.symbol_map)
 e["lookup_symbol"] = e["symbol"].map(lambda x: amap.get(x, x))
 ca["lookup_symbol"] = ca["symbol"].map(lambda x: amap.get(x, x))
 
+# NSE can publish simultaneous corporate actions as separate rows on the
+# same symbol/ex-date (e.g. bonus + split). Aggregate all price-affecting
+# factors before comparing with the observed price discontinuity.
+ca["has_action"] = ca["purpose"].str.len().fillna(0).gt(0)
+ca["_factor"] = pd.to_numeric(ca["inferred_factor"], errors="coerce")
+ca["_factor_for_product"] = ca["_factor"].fillna(1.0)
+ca_group = (
+    ca.groupby(["lookup_symbol", "ex_date"], dropna=False)
+      .agg(
+          purpose=("purpose", lambda s: " / ".join(
+              dict.fromkeys(str(x) for x in s if str(x).strip() and str(x).lower() != "nan")
+          )),
+          inferred_factor=("_factor_for_product", "prod"),
+          has_action=("has_action", "any"),
+          factor_count=("_factor", lambda s: int(s.notna().sum())),
+          action_type=("action_type", lambda s: "+".join(
+              dict.fromkeys(str(x) for x in s if str(x).strip() and str(x).lower() != "nan")
+          )),
+          record_date=("rec_date", "first"),
+          face_value=("face_val", "first"),
+      )
+      .reset_index()
+)
+# If an action date has no price factor at all, do not manufacture a factor.
+ca_group.loc[ca_group["factor_count"] == 0, "inferred_factor"] = float("nan")
+
 m = e.merge(
-    ca,
+    ca_group,
     how="left",
     left_on=["lookup_symbol", "date"],
     right_on=["lookup_symbol", "ex_date"],
@@ -96,7 +122,7 @@ m = e.merge(
 m["factor_error"] = abs(m["observed_factor"] / m["inferred_factor"] - 1)
 m["status"] = "NO_EXACT_ACTION"
 
-has = m["purpose"].notna() & (m["purpose"].str.len() > 0)
+has = m["has_action"].fillna(False)
 m.loc[has, "status"] = "ACTION_ON_DATE"
 
 exact_factor = (
@@ -116,10 +142,6 @@ m.loc[
     "status"
 ] = "ACTION_RATIO_MISMATCH"
 
-if "rec_date" in m.columns and "record_date" not in m.columns:
-    m["record_date"] = m["rec_date"]
-if "face_val" in m.columns and "face_value" not in m.columns:
-    m["face_value"] = m["face_val"]
 
 cols = [
     "symbol_extreme", "date", "prev_close", "close", "return",
