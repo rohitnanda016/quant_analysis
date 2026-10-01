@@ -52,14 +52,11 @@ g = (ca.dropna(subset=["ex_date", "factor_component"])
        .groupby(["lookup_symbol", "ex_date"], as_index=False)
        .agg(
            theoretical_factor=("factor_component", "prod"),
-           purpose=("purpose", lambda s: " / ".join(dict.fromkeys(x.strip() for x in s if x.strip())),
+           purpose=("purpose", lambda s: " / ".join(dict.fromkeys(x.strip() for x in s if x.strip()))),
            action_type=("action_type", lambda s: "+".join(dict.fromkeys(x for x in s if str(x).strip()))),
            source=("symbol", lambda s: "NSE corporate actions"),
            source_symbol=("symbol", "first"),
        ))
-
-# Reconciliation observes PrevClose/ExClose, so a price series is
-# back-adjusted before the ex-date by the reciprocal.
 g["factor"] = 1.0 / g["theoretical_factor"]
 g["confidence"] = "high_exchange_documented"
 
@@ -67,18 +64,18 @@ if args.supplemental and Path(args.supplemental).exists():
     sup = pd.read_csv(args.supplemental)
     sup["symbol"] = sup["symbol"].astype(str).str.upper().str.strip()
     sup["ex_date"] = pd.to_datetime(sup["ex_date"], errors="coerce")
-    sup["factor"] = pd.to_numeric(sup["factor"], errors="coerce")
-    sup["source"] = sup["source"].fillna("verified manual") if "source" in sup.columns else "verified manual"
-    sup["action"] = sup["action"].fillna("") if "action" in sup.columns else ""
-    sup = sup.dropna(subset=["symbol", "ex_date", "factor"])
+    sup["theoretical_factor"] = pd.to_numeric(sup["inferred_factor"], errors="coerce")
+    sup = sup.dropna(subset=["symbol", "ex_date", "theoretical_factor"])
     sup["lookup_symbol"] = sup["symbol"].map(lambda x: aliases.get(x, x))
     existing = pd.MultiIndex.from_frame(g[["lookup_symbol", "ex_date"]])
-    sup = sup[~pd.MultiIndex.from_frame(sup[["lookup_symbol", "ex_date"]]).isin(existing)]
-    sup["theoretical_factor"] = 1.0 / sup["factor"]
-    sup["purpose"] = sup["action"]
-    sup["action_type"] = "manual_verified"
+    sup_idx = pd.MultiIndex.from_frame(sup[["lookup_symbol", "ex_date"]])
+    sup = sup[~sup_idx.isin(existing)]
+    sup["factor"] = 1.0 / sup["theoretical_factor"]
+    sup["purpose"] = sup.get("subject", "")
+    sup["action_type"] = sup.get("action_type", "manual_verified")
+    sup["source"] = sup.get("source", "verified manual")
     sup["source_symbol"] = sup["symbol"]
-    sup["confidence"] = "high_manual_verified"
+    sup["confidence"] = sup.get("confidence", "high_manual_verified")
     g = pd.concat([g, sup[g.columns]], ignore_index=True)
 
 g = g.sort_values(["lookup_symbol", "ex_date"]).drop_duplicates(["lookup_symbol", "ex_date"], keep="first")
