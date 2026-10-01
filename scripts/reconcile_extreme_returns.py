@@ -5,8 +5,18 @@ import pandas as pd
 def parse_factor(purpose):
     p = str(purpose or "").upper()
 
-    # Observed factor is Prev Close / Ex-date Close. For a face-value
-    # subdivision from old to new, the price factor is old/new.
+    # Observed factor is Prev Close / Ex-date Close. Build the total
+    # factor from every price-affecting component in the action text.
+    factors = []
+    action_types = []
+
+    bonus_matches = re.findall(r"BONUS\s+(\d+)\s*:\s*(\d+)", p)
+    for x, y in bonus_matches:
+        x, y = int(x), int(y)
+        if y > 0:
+            factors.append((x + y) / y)
+            action_types.append("bonus")
+
     split_matches = re.findall(
         r"FROM\s+RS\.?\s*([0-9.]+).*?TO\s+R?S?\.?\s*([0-9.]+)",
         p
@@ -14,17 +24,16 @@ def parse_factor(purpose):
     if split_matches and ("SPLIT" in p or "CONSOLIDATION" in p or "SUB-DIVISION" in p):
         old, new = map(float, split_matches[-1])
         if new > 0:
-            return old / new, "split_or_consolidation"
+            factors.append(old / new)
+            action_types.append("split_or_consolidation")
 
-    # Bonus x:y means x new shares for every y old shares. The price
-    # adjustment factor is (x+y)/y.
-    m = re.search(r"BONUS\s+(\d+)\s*:\s*(\d+)", p)
-    if m:
-        x, y = int(m.group(1)), int(m.group(2))
-        if y > 0:
-            return (x + y) / y, "bonus"
+    if not factors:
+        return None, None
 
-    return None, None
+    factor = 1.0
+    for f in factors:
+        factor *= f
+    return factor, "+".join(action_types)
 
 def aliases(path):
     if not Path(path).exists():
