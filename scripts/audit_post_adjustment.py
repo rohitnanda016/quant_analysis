@@ -14,16 +14,27 @@ out.mkdir(parents=True, exist_ok=True)
 ext = pd.read_csv(a.extremes, low_memory=False)
 rec = pd.read_csv(a.reconciliation, low_memory=False)
 
-adj_cols = ["date", "symbol", "prev_close", "close", "adjustment_factor"]
+# audit_price_quality.py emits canonical_symbol for extreme events because
+# corporate-action adjustments are applied on canonical symbols. The
+# reconciliation output calls that field "symbol", so normalize the event
+# identifier before comparing adjusted continuity.
+if "canonical_symbol" in ext.columns:
+    ext["symbol"] = ext["canonical_symbol"]
+elif "symbol" not in ext.columns:
+    raise SystemExit(f"Extreme-return file has no canonical_symbol/symbol column: {list(ext.columns)}")
+
+adj_cols = ["date", "canonical_symbol", "symbol", "prev_close", "close", "adjustment_factor"]
 parts = []
 for ch in pd.read_csv(a.adjusted, usecols=lambda c: c in adj_cols, chunksize=300000, low_memory=False):
+    if "canonical_symbol" not in ch.columns:
+        ch["canonical_symbol"] = ch["symbol"]
     parts.append(ch)
 adj = pd.concat(parts, ignore_index=True)
 
 ext["date"] = pd.to_datetime(ext["date"], errors="coerce")
 adj["date"] = pd.to_datetime(adj["date"], errors="coerce")
 ext["symbol"] = ext["symbol"].astype(str).str.upper().str.strip()
-adj["symbol"] = adj["symbol"].astype(str).str.upper().str.strip()
+adj["canonical_symbol"] = adj["canonical_symbol"].astype(str).str.upper().str.strip()
 
 for df in (ext, adj):
     for c in ["prev_close", "close", "adjustment_factor"]:
@@ -31,7 +42,9 @@ for df in (ext, adj):
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
 merged = ext[["date", "symbol", "prev_close", "close", "return"]].merge(
-    adj[["date", "symbol", "prev_close", "close", "adjustment_factor"]],
+    adj[["date", "canonical_symbol", "prev_close", "close", "adjustment_factor"]].rename(
+        columns={"canonical_symbol": "symbol"}
+    ),
     on=["date", "symbol"], how="left", suffixes=("_raw", "_adj")
 )
 merged["adjusted_return"] = merged["close_adj"] / merged["prev_close_adj"] - 1.0
