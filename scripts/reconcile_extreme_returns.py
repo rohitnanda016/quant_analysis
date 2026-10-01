@@ -155,7 +155,7 @@ m.loc[
 
 
 cols = [
-    "symbol_extreme", "date", "prev_close", "close", "return",
+    "symbol", "date", "prev_close", "close", "return",
     "observed_factor", "symbol_action", "purpose", "ex_date",
     "record_date", "face_value", "inferred_factor", "action_type",
     "factor_error", "status"
@@ -173,7 +173,7 @@ rank = {
 m["_rank"] = m["status"].map(rank).fillna(99)
 best = (
     m.sort_values(
-        ["symbol_extreme", "date", "_rank", "factor_error"],
+        ["symbol", "date", "_rank", "factor_error"],
         na_position="last"
     )
     .drop_duplicates(["symbol_extreme", "date"], keep="first")
