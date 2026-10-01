@@ -104,6 +104,7 @@ ca["_factor_for_product"] = ca["_factor"].fillna(1.0)
 ca_group = (
     ca.groupby(["lookup_symbol", "ex_date"], dropna=False)
       .agg(
+          symbol_action=("lookup_symbol", "first"),
           purpose=("purpose", lambda s: " / ".join(
               dict.fromkeys(str(x) for x in s if str(x).strip() and str(x).lower() != "nan")
           )),
@@ -160,7 +161,7 @@ cols = [
     "factor_error", "status"
 ]
 cols = [c for c in cols if c in m.columns]
-m[cols].sort_values(["date", "symbol_extreme"]).to_csv(a.out, index=False)
+m[cols].sort_values(["date", "lookup_symbol"]).to_csv(a.out, index=False)
 
 rank = {
     "EXACT_SPLIT_BONUS_RATIO_MATCH": 0,
