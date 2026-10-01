@@ -161,7 +161,7 @@ cols = [
     "factor_error", "status"
 ]
 cols = [c for c in cols if c in m.columns]
-m[cols].sort_values(["date", "symbol_extreme"]).to_csv(a.out, index=False)
+m[cols].sort_values(["date", "symbol"]).to_csv(a.out, index=False)
 
 rank = {
     "EXACT_SPLIT_BONUS_RATIO_MATCH": 0,
@@ -176,7 +176,7 @@ best = (
         ["symbol", "date", "_rank", "factor_error"],
         na_position="last"
     )
-    .drop_duplicates(["symbol_extreme", "date"], keep="first")
+    .drop_duplicates(["symbol", "date"], keep="first")
 )
 
 summary = {
