@@ -12,13 +12,14 @@ out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 def num(s):
     return pd.to_numeric(s.astype(str).str.replace(",","",regex=False).str.replace("₹","",regex=False).str.strip(),errors="coerce")
 
-cols=["canonical_symbol","symbol","date","prev_close","open","high","low","close","vwap","volume"]
+cols=["canonical_symbol","symbol","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
 total=0; missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
 extreme_rows=[]; seen=set()
 
 for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols or c=="turnover_₹",chunksize=250000,low_memory=False):
     total += len(ch)
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
+    if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns: ch["turnover_₹"]=ch["turnover ₹"]
     for c in ["prev_close","open","high","low","close","vwap","volume","turnover_₹"]:
         if c in ch: ch[c]=num(ch[c])
     missing_ohlc += int(ch[["open","high","low","close"]].isna().any(axis=1).sum())
