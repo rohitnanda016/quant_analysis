@@ -57,4 +57,5 @@ jobs:
             data/input/nifty500_membership.csv
             data/input/nse_corporate_actions_2014_2026.csv
             data/input/nse_corporate_actions_2014_2026.csv.summary.json
+            data/input/verified_manual_corporate_actions.csv
           retention-days: 30
