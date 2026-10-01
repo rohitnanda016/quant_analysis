@@ -36,7 +36,54 @@ jobs:
           python -c "import json; x=json.load(open('data/raw/stage_a_prices.audit.json')); print(x.get('rows'), x.get('failed_symbols'), x.get('failed_chunks'))"
       - name: Repair SGPC and SHTV
         run: |
-          python scripts/repair_failed_chunks.py             --prices data/raw/stage_a_prices.csv             --out data/raw/stage_a_prices.csv             --start 2014-01-01             --end 2026-08-31             --symbols SGPC,SHTV             --chunk-days 365             --sleep 3             --retries 4
+          python - <<'PY'
+          import time
+          import pandas as pd
+          from download_stage_a import get_chunk
+
+          path = "data/raw/stage_a_prices.csv"
+          out = path
+          base = pd.read_csv(path, low_memory=False)
+          base["date"] = pd.to_datetime(base["date"], errors="coerce")
+          base["symbol"] = base["symbol"].astype(str).str.strip().str.upper()
+
+          parts = [base]
+          results = []
+          for sym in ["SGPC", "SHTV"]:
+              cur = pd.Timestamp("2014-01-01")
+              end = pd.Timestamp("2026-08-31")
+              while cur <= end:
+                  chunk_end = min(cur + pd.Timedelta(days=364), end)
+                  repaired = False
+                  last_error = None
+                  for attempt in range(1, 6):
+                      try:
+                          d, last_error = get_chunk(sym, cur, chunk_end, retries=1)
+                          if len(d):
+                              d["requested_symbol"] = sym
+                              d["source_symbol"] = sym
+                              parts.append(d)
+                              results.append({"symbol":sym,"start":str(cur.date()),"end":str(chunk_end.date()),"status":"repaired","rows":len(d),"attempt":attempt})
+                              repaired = True
+                              break
+                      except Exception as exc:
+                          last_error = str(exc)
+                      time.sleep(min(90, 5 * (2 ** (attempt - 1))))
+                  if not repaired:
+                      results.append({"symbol":sym,"start":str(cur.date()),"end":str(chunk_end.date()),"status":"failed","rows":0,"error":str(last_error)})
+                  time.sleep(3)
+                  cur = chunk_end + pd.Timedelta(days=1)
+
+          out_df = pd.concat(parts, ignore_index=True)
+          out_df = out_df.dropna(subset=["date","symbol"]).drop_duplicates(["date","symbol"]).sort_values(["date","symbol"])
+          out_df.to_csv(out, index=False)
+          repaired = sum(x["status"] == "repaired" for x in results)
+          failed = sum(x["status"] == "failed" for x in results)
+          print({"base_rows":len(base),"final_rows":len(out_df),"chunks":len(results),"repaired_chunks":repaired,"remaining_failed_chunks":failed})
+          if failed:
+              raise SystemExit("Repair still has failed chunks")
+          PY
+
       - name: Upload repaired dataset
         uses: actions/upload-artifact@v4
         with:
