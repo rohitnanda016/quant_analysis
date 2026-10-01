@@ -48,7 +48,9 @@ for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
     if mask.any():
         for c in price_cols:
             if c in ch: ch.loc[mask,c]=ch.loc[mask,c]*factors[mask]
-        if "volume" in ch: ch.loc[mask,"volume"]=ch.loc[mask,"volume"]/factors[mask]
+        if "volume" in ch:
+            ch["volume"]=ch["volume"].astype(float)
+            ch.loc[mask,"volume"]=ch.loc[mask,"volume"].to_numpy(dtype=float)/factors[mask]
         adjusted_rows += int(mask.sum())
     ch["adjustment_factor"]=factors
     ch["adjustment_method"]="verified_split_bonus_proxy"
