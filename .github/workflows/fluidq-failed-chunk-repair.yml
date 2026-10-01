@@ -37,8 +37,9 @@ jobs:
       - name: Repair SGPC and SHTV
         run: |
           python - <<'PY'
-          import time
+          import time, sys
           import pandas as pd
+          sys.path.insert(0, "scripts")
           from download_stage_a import get_chunk
 
           path = "data/raw/stage_a_prices.csv"
