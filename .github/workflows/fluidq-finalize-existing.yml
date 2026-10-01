@@ -1,0 +1,64 @@
+name: FLUID-Q Finalize Existing Dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "Completed full-history run whose artifact should be finalized"
+        required: true
+        default: "36806513002"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download prior full-history artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-full-history-${{ inputs.base_run_id }}
+          path: base_artifact
+          run-id: ${{ inputs.base_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore and prepare membership
+        run: |
+          mkdir -p data/raw data/input results/latest
+          cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
+          curl -L --fail --retry 4 https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/main/index_history/data/index_membership_history.csv -o data/input/membership_full.csv
+          python - <<'PY'
+          import pandas as pd
+          x=pd.read_csv("data/input/membership_full.csv")
+          x.columns=[str(c).strip().lower().replace(" ","_") for c in x.columns]
+          x=x[x.index_name.astype(str).str.strip().str.lower()=="nifty 500"]
+          x.to_csv("data/input/nifty500_membership_source.csv",index=False)
+          PY
+          python scripts/build_historical_membership.py --membership data/input/nifty500_membership_source.csv --out data/input/nifty500_membership.csv --start 2014-01-01 --end 2026-08-31
+      - name: Build V6.2 identity
+        run: python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
+      - name: Audit coverage
+        run: python scripts/audit_v6_2_gaps.py --prices data/processed/v6_2/prices_with_canonical_symbol.csv --membership data/processed/v6_2/membership_with_canonical_symbol.csv --outdir results/latest
+      - name: Finalization metadata
+        run: |
+          python - <<'PY'
+          import json
+          json.dump({"stage":"finalize-existing-full-history","base_run_id":"${{ inputs.base_run_id }}","start_date":"2014-01-01","end_date":"2026-08-31"},open("results/latest/finalization_metadata.json","w"),indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-finalized-full-history-${{ github.run_id }}
+          path: |
+            data/raw/
+            data/input/nifty500_membership.csv
+            data/processed/v6_2/
+            results/latest/
+          retention-days: 30
