@@ -15,7 +15,7 @@ permissions:
 jobs:
   price-integrity:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,10 +26,10 @@ jobs:
       - name: Download finalized dataset
         uses: actions/download-artifact@v5
         with:
-          name: fluidq-finalized-full-history-${{ inputs.base_run_id }}
+          name: fluidq-finalized-full-history-${{inputs.base_run_id}}
           path: base_artifact
-          run-id: ${{ inputs.base_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{inputs.base_run_id}}
+          github-token: ${{secrets.GITHUB_TOKEN}}
       - name: Restore inputs
         run: |
           mkdir -p data/raw data/input results/price_quality data/processed/adjusted
@@ -37,16 +37,24 @@ jobs:
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
       - name: Audit raw price quality
         run: |
-          python scripts/audit_price_quality.py             --prices data/raw/stage_a_prices.csv             --outdir results/price_quality
+          python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
+      - name: Fetch NSE corporate actions
+        run: |
+          python scripts/fetch_nse_corporate_actions.py             --start 2014-01-01             --end 2026-08-31             --out data/input/nse_corporate_actions_2014_2026.csv
+      - name: Reconcile extreme returns against NSE actions
+        run: |
+          python scripts/reconcile_extreme_returns.py             --extremes results/price_quality/extreme_returns_raw.csv             --actions data/input/nse_corporate_actions_2014_2026.csv             --symbol-map data/input/verified_symbol_map.csv             --out results/price_quality/extreme_return_reconciliation.csv
       - name: Apply verified 2022 adjustment proxy
         run: |
           python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_2022_corporate_actions.csv             --out data/processed/adjusted/prices_adjusted_2022_proxy.csv
       - name: Upload price-integrity artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fluidq-price-integrity-${{ github.run_id }}
+          name: fluidq-price-integrity-${{github.run_id}}
           path: |
             results/price_quality/
             data/processed/adjusted/
             data/input/nifty500_membership.csv
+            data/input/nse_corporate_actions_2014_2026.csv
+            data/input/nse_corporate_actions_2014_2026.csv.summary.json
           retention-days: 30
