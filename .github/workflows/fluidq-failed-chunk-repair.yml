@@ -1,0 +1,47 @@
+name: FLUID-Q Failed Chunk Repair
+
+on:
+  push:
+    paths:
+      - "scripts/repair_failed_chunks.py"
+      - ".github/workflows/fluidq-failed-chunk-repair.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download prior full-history artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-full-history-36806513002
+          path: base_artifact
+          run-id: 36806513002
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore prior dataset
+        run: |
+          mkdir -p data/raw data/input
+          cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
+          cp base_artifact/data/raw/stage_a_prices.audit.json data/raw/stage_a_prices.audit.json
+          python -c "import json; x=json.load(open('data/raw/stage_a_prices.audit.json')); print(x.get('rows'), x.get('failed_symbols'), x.get('failed_chunks'))"
+      - name: Repair SGPC and SHTV
+        run: |
+          python scripts/repair_failed_chunks.py             --prices data/raw/stage_a_prices.csv             --out data/raw/stage_a_prices.csv             --start 2014-01-01             --end 2026-08-31             --symbols SGPC,SHTV             --chunk-days 365             --sleep 3             --retries 4
+      - name: Upload repaired dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-full-history-repaired-36806513002
+          path: |
+            data/raw/stage_a_prices.csv
+            data/raw/stage_a_prices.repair.json
+          retention-days: 30
