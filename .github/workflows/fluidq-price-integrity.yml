@@ -49,7 +49,7 @@ jobs:
           python scripts/build_price_adjustment_actions.py             --actions data/input/nse_corporate_actions_2014_2026.csv             --symbol-map data/input/verified_symbol_map.csv             --supplemental data/input/verified_manual_corporate_actions.csv             --out data/input/verified_price_adjustment_actions.csv
       - name: Apply full split and bonus adjustments
         run: |
-          python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_price_adjustment_actions.csv             --out data/processed/adjusted/prices_adjusted_split_bonus.csv
+          python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_price_adjustment_actions.csv             --symbol-map data/input/verified_symbol_map.csv             --out data/processed/adjusted/prices_adjusted_split_bonus.csv
       - name: Audit post-adjustment corporate-action continuity
         run: |
           python scripts/audit_post_adjustment.py             --extremes results/price_quality/extreme_returns_raw.csv             --reconciliation results/price_quality/extreme_return_reconciliation.csv             --adjusted data/processed/adjusted/prices_adjusted_split_bonus.csv             --outdir results/price_quality/post_adjustment
