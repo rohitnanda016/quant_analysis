@@ -1,0 +1,3 @@
+symbol,valid_from,valid_to,reason,source
+SGPC,2014-01-01,2021-09-30,Membership-source anomaly: no matching NSE security identity or historical price data; source marks closed by ind_prs23082021.pdf,source membership dataset / NSE press-release reference
+SHTV,2014-01-01,2021-09-30,Membership-source anomaly: no matching NSE security identity or historical price data; source marks closed by ind_prs23082021.pdf,source membership dataset / NSE press-release reference
