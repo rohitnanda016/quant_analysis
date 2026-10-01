@@ -30,6 +30,7 @@ outp=Path(a.out); outp.parent.mkdir(parents=True,exist_ok=True)
 first=True; adjusted_rows=0
 price_cols=["prev_close","open","high","low","close","vwap"]
 for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
+    if "canonical_symbol" not in ch.columns: ch["canonical_symbol"]=ch["symbol"]
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
     if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns: ch["turnover_₹"]=ch["turnover ₹"]
     for c in price_cols+["volume","turnover_₹"]:
