@@ -59,6 +59,7 @@ p.add_argument("--extremes", required=True)
 p.add_argument("--actions", required=True)
 p.add_argument("--symbol-map", required=False, default="")
 p.add_argument("--out", required=True)
+p.add_argument("--supplemental-actions", default="data/input/verified_manual_corporate_actions.csv")
 a = p.parse_args()
 
 e = pd.read_csv(a.extremes)
@@ -70,6 +71,15 @@ e["observed_factor"] = (
 )
 
 ca = pd.read_csv(a.actions)
+# Add independently verified actions that are missing from the NSE API extract.
+# These remain explicitly sourced and are never inferred from the price series.
+if Path(a.supplemental_actions).exists():
+    sup = pd.read_csv(a.supplemental_actions)
+    for c in ["bc_end_date","bc_start_date","ca_broadcast_date","comp","isin","ind","nd_end_date","nd_start_date","record_date","face_value"]:
+        if c not in sup.columns:
+            sup[c] = ""
+    sup = sup.rename(columns={"record_date":"rec_date","face_value":"face_val"})
+    ca = pd.concat([ca, sup], ignore_index=True, sort=False)
 ca.columns = [
     str(c).strip().lower().replace(" ", "_").replace("-", "_")
     for c in ca.columns
