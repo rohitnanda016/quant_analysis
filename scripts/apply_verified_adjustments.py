@@ -31,6 +31,7 @@ first=True; adjusted_rows=0
 price_cols=["prev_close","open","high","low","close","vwap"]
 for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
+    if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns: ch["turnover_₹"]=ch["turnover ₹"]
     for c in price_cols+["volume","turnover_₹"]:
         if c in ch: ch[c]=pd.to_numeric(ch[c].astype(str).str.replace(",","",regex=False).str.replace("₹","",regex=False).str.strip(),errors="coerce")
     factors=np.ones(len(ch),dtype=float)
