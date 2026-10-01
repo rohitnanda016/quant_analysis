@@ -143,12 +143,13 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     g.rename(columns={"lookup_symbol": "symbol"}).to_csv(out, index=False)
 
+    summary = g.rename(columns={"lookup_symbol": "symbol"})
     print({
-        "actions": int(len(g)),
-        "symbols": int(g["symbol"].nunique()),
-        "start": str(g["ex_date"].min().date()),
-        "end": str(g["ex_date"].max().date()),
-        "manual_added": int(sum(1 for x in g["confidence"] if str(x) == "high_manual_verified")),
+        "actions": int(len(summary)),
+        "symbols": int(summary["symbol"].nunique()),
+        "start": str(summary["ex_date"].min().date()),
+        "end": str(summary["ex_date"].max().date()),
+        "manual_added": int(sum(1 for x in summary["confidence"] if str(x) == "high_manual_verified")),
     })
 
 if __name__ == "__main__":
