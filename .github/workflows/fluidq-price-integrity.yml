@@ -1,0 +1,53 @@
+name: FLUID-Q Price Integrity
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "Finalized full-history workflow run"
+        required: true
+        default: "36875371038"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  price-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download finalized dataset
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-finalized-full-history-${{ inputs.base_run_id }}
+          path: base_artifact
+          run-id: ${{ inputs.base_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore inputs
+        run: |
+          mkdir -p data/raw data/input results/price_quality data/processed/adjusted
+          cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
+          cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
+          cp data/input/verified_2022_corporate_actions.csv data/input/verified_2022_corporate_actions.csv
+      - name: Audit raw price quality
+        run: |
+          python scripts/audit_price_quality.py             --prices data/raw/stage_a_prices.csv             --outdir results/price_quality
+      - name: Apply verified 2022 adjustment proxy
+        run: |
+          python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_2022_corporate_actions.csv             --out data/processed/adjusted/prices_adjusted_2022_proxy.csv
+      - name: Upload price-integrity artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-integrity-${{ github.run_id }}
+          path: |
+            results/price_quality/
+            data/processed/adjusted/
+            data/input/nifty500_membership.csv
+          retention-days: 30
