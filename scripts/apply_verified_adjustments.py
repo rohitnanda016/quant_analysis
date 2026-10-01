@@ -49,13 +49,15 @@ for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
 
     factors=np.ones(len(ch),dtype=float)
     for sym,idx in ch.groupby("canonical_symbol",sort=False).groups.items():
-        if sym not in events: continue
+        if sym not in events:
+            continue
         dates,fs=events[sym]
-        d=ch.loc[idx,"date"].to_numpy()
-        vals=np.ones(len(idx),dtype=float)
+        positions=ch.index.get_indexer(idx)
+        d=ch["date"].iloc[positions].to_numpy()
+        vals=np.ones(len(positions),dtype=float)
         for ex,f in zip(dates,fs):
             vals[d<ex] *= f
-        factors[list(idx)] = vals
+        factors[positions]=vals
 
     mask=factors!=1
     nonunit_rows += int(mask.sum())
