@@ -8,7 +8,7 @@ on:
         required: true
         default: full-history
         type: choice
-        options: [full-history, stage-a, identity-audit]
+        options: [full-history, repair-full-history, stage-a, identity-audit]
       start_date:
         description: "Start date (YYYY-MM-DD)"
         required: true
@@ -17,9 +17,14 @@ on:
         description: "End date (YYYY-MM-DD)"
         required: true
         default: 2026-08-31
+      base_run_id:
+        description: "Completed full-history run to repair (required for repair-full-history)"
+        required: false
+        default: 36806513002
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   research:
@@ -40,6 +45,7 @@ jobs:
           STAGE: ${{ inputs.stage }}
           START_DATE: ${{ inputs.start_date }}
           END_DATE: ${{ inputs.end_date }}
+          BASE_RUN_ID: ${{ inputs.base_run_id }}
         run: |
           python - <<'PY'
           import os
@@ -58,17 +64,17 @@ jobs:
           if start_d > end_d:
               raise SystemExit(f"Start date {start} is after end date {end}")
 
-          if stage == "full-history":
+          if stage in ("full-history","repair-full-history"):
               if start != "2014-01-01" or end != "2026-08-31":
-                  raise SystemExit(
-                      "full-history must use exactly 2014-01-01 through 2026-08-31"
-                  )
+                  raise SystemExit("full-history and repair-full-history must use exactly 2014-01-01 through 2026-08-31")
+          if stage == "repair-full-history" and not os.environ.get("BASE_RUN_ID","").strip():
+              raise SystemExit("repair-full-history requires base_run_id")
 
           print(f"RUN PARAMETERS: stage={stage}, start={start}, end={end}")
           PY
 
       - name: Prepare historical membership
-        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           mkdir -p data/input data/raw results/latest
           curl -L --fail --retry 4 https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/main/index_history/data/index_membership_history.csv -o data/input/membership_full.csv
@@ -90,6 +96,28 @@ jobs:
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
         run: |
           python scripts/probe_nse_symbols.py --start 23-06-2022 --end 30-06-2022 --out results/latest/nse_symbol_probe.json
+
+      - name: Download prior full-history artifact
+        if: ${{ inputs.stage == 'repair-full-history' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-full-history-${{ inputs.base_run_id }}
+          path: base_artifact
+          run-id: ${{ inputs.base_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore prior dataset for repair
+        if: ${{ inputs.stage == 'repair-full-history' }}
+        run: |
+          mkdir -p data/raw
+          cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
+          cp base_artifact/data/raw/stage_a_prices.audit.json data/raw/stage_a_prices.audit.json
+          python -c "import json; x=json.load(open('data/raw/stage_a_prices.audit.json')); print('BASE ROWS:',x.get('rows')); print('FAILED SYMBOLS:',x.get('failed_symbols')); print('FAILED CHUNKS:',x.get('failed_chunks'))"
+
+      - name: Repair only failed chunks
+        if: ${{ inputs.stage == 'repair-full-history' }}
+        run: |
+          python scripts/repair_from_artifact.py --prices data/raw/stage_a_prices.csv --audit data/raw/stage_a_prices.audit.json --out data/raw/stage_a_prices.csv --sleep 3 --retries 4
 
       - name: Download NSE prices
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
@@ -148,7 +176,7 @@ jobs:
           PY
 
       - name: Build V6.2 identity
-        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/build_v6_2_identity.py \
             --prices data/raw/stage_a_prices.csv \
@@ -156,7 +184,7 @@ jobs:
             --symbol-map data/input/verified_symbol_map.csv
 
       - name: Audit coverage
-        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/audit_v6_2_gaps.py \
             --prices data/processed/v6_2/prices_with_canonical_symbol.csv \
