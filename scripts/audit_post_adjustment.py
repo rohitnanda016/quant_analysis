@@ -32,6 +32,7 @@ for ch in pd.read_csv(a.adjusted, usecols=lambda c: c in adj_cols, chunksize=300
 adj = pd.concat(parts, ignore_index=True)
 
 ext["date"] = pd.to_datetime(ext["date"], errors="coerce")
+rec["date"] = pd.to_datetime(rec["date"], errors="coerce")
 adj["date"] = pd.to_datetime(adj["date"], errors="coerce")
 ext["symbol"] = ext["symbol"].astype(str).str.upper().str.strip()
 adj["canonical_symbol"] = adj["canonical_symbol"].astype(str).str.upper().str.strip()
