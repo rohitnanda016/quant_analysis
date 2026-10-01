@@ -35,7 +35,6 @@ jobs:
           mkdir -p data/raw data/input results/price_quality data/processed/adjusted
           cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
-          cp data/input/verified_2022_corporate_actions.csv data/input/verified_2022_corporate_actions.csv
       - name: Audit raw price quality
         run: |
           python scripts/audit_price_quality.py             --prices data/raw/stage_a_prices.csv             --outdir results/price_quality
