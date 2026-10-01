@@ -44,7 +44,13 @@ jobs:
       - name: Reconcile extreme returns against NSE actions
         run: |
           python scripts/reconcile_extreme_returns.py             --extremes results/price_quality/extreme_returns_raw.csv             --actions data/input/nse_corporate_actions_2014_2026.csv             --symbol-map data/input/verified_symbol_map.csv             --out results/price_quality/extreme_return_reconciliation.csv
-      - name: Apply verified 2022 adjustment proxy
+      - name: Build full split and bonus adjustment table
+        run: |
+          python scripts/build_price_adjustment_actions.py             --actions data/input/nse_corporate_actions_2014_2026.csv             --symbol-map data/input/verified_symbol_map.csv             --supplemental data/input/verified_manual_corporate_actions.csv             --out data/input/verified_price_adjustment_actions.csv
+      - name: Apply full split and bonus adjustments
+        run: |
+          python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_price_adjustment_actions.csv             --out data/processed/adjusted/prices_adjusted_split_bonus.csv
+      - name: Apply legacy 2022 adjustment proxy
         run: |
           python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_2022_corporate_actions.csv             --out data/processed/adjusted/prices_adjusted_2022_proxy.csv
       - name: Upload price-integrity artifact
@@ -57,5 +63,6 @@ jobs:
             data/input/nifty500_membership.csv
             data/input/nse_corporate_actions_2014_2026.csv
             data/input/nse_corporate_actions_2014_2026.csv.summary.json
+            data/input/verified_price_adjustment_actions.csv
             data/input/verified_manual_corporate_actions.csv
           retention-days: 30
