@@ -1,4 +1,4 @@
-import argparse, json, time
+import argparse, json, re, time
 from pathlib import Path
 
 import pandas as pd
@@ -44,7 +44,6 @@ def fetch_session():
 
         for attempt in range(6):
             try:
-                # Warm the session, but don't make this request a hard prerequisite.
                 try:
                     s.get(base + "/", timeout=20)
                 except requests.RequestException:
@@ -101,7 +100,6 @@ def get_range(s, start, end):
         except Exception as exc:
             last_error = exc
 
-        # Refresh cookies after throttling/server errors.
         if attempt in (2, 4):
             try:
                 s.get("https://www.nseindia.com/", timeout=20)
@@ -114,6 +112,14 @@ def get_range(s, start, end):
         f"NSE corporate-actions request failed for "
         f"{start.date()}..{end.date()}: {last_error}"
     )
+
+
+def normalize_column_name(value):
+    # Handle NSE camelCase (e.g. exDate), spaces, hyphens and underscores.
+    name = str(value).strip()
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    name = re.sub(r"[^A-Za-z0-9]+", "_", name)
+    return name.strip("_").lower()
 
 
 p = argparse.ArgumentParser()
@@ -141,13 +147,14 @@ while cur <= end:
 out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 if not out.empty:
-    out.columns = [
-        str(c).strip().lower().replace(" ", "_") for c in out.columns
-    ]
+    out.columns = [normalize_column_name(c) for c in out.columns]
 
+    # NSE has historically used both exDate and ex_date-style representations.
+    # normalize_column_name() converts exDate -> ex_date.
     if "symbol" not in out.columns or "ex_date" not in out.columns:
         raise RuntimeError(
-            "NSE corporate-action response is missing required symbol/ex_date columns"
+            "NSE corporate-action response is missing required symbol/ex_date "
+            f"columns; received columns={list(out.columns)}"
         )
 
     out["symbol"] = out["symbol"].astype(str).str.upper().str.strip()
@@ -166,7 +173,8 @@ summary = {
     "end": str(end.date()),
     "source": "https://www.nseindia.com" + API_PATH,
     "chunks": int(((end - start).days // 90) + 1),
+    "columns": list(out.columns),
 }
 
 Path(a.out + ".summary.json").write_text(json.dumps(summary, indent=2))
-print(json.dumps({"rows": int(len(out)), "out": a.out}, indent=2))
+print(json.dumps({"rows": int(len(out)), "out": a.out, "columns": list(out.columns)}, indent=2))
