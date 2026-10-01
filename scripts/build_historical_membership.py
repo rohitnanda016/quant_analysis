@@ -41,9 +41,15 @@ def main():
     m["valid_to"] = pd.to_datetime(m.valid_to, errors="coerce")
     start, end = pd.Timestamp(a.start), pd.Timestamp(a.end)
     changes = load_symbol_changes()
+    exclusions = pd.read_csv("data/input/verified_membership_exclusions.csv")
+    exclusions["symbol"] = exclusions["symbol"].astype(str).str.strip().str.upper()
+    excluded_symbols = set(exclusions["symbol"])
+    print("excluded membership symbols", sorted(excluded_symbols))
 
     out = []
     for _, r in m.iterrows():
+        if str(r.symbol).strip().upper() in excluded_symbols:
+            continue
         vf = r.valid_from
         vt = r.valid_to if pd.notna(r.valid_to) else end
         if pd.isna(vf) or vt < start or vf > end:
