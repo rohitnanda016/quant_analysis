@@ -117,7 +117,7 @@ jobs:
       - name: Repair only failed chunks
         if: ${{ inputs.stage == 'repair-full-history' }}
         run: |
-          python scripts/repair_from_artifact.py --prices data/raw/stage_a_prices.csv --out data/raw/stage_a_prices.csv --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" --symbols "SGPC,SHTV" --chunk-days 365 --sleep 3 --retries 4
+          python scripts/repair_failed_chunks.py --prices data/raw/stage_a_prices.csv --out data/raw/stage_a_prices.csv --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" --symbols "SGPC,SHTV" --chunk-days 365 --sleep 3 --retries 4
 
       - name: Download NSE prices
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' }}
