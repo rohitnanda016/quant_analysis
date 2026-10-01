@@ -1,7 +1,7 @@
 {
-  "stage": "stage-a",
-  "start_date": "2022-01-03",
-  "end_date": "2022-07-29",
-  "git_commit": "87b1aefe66aefc234453bd267e960fb9aae990c9",
-  "workflow_run": "36737304629"
+  "stage": "full-history",
+  "start_date": "2014-01-01",
+  "end_date": "2026-08-31",
+  "git_commit": "7d7025707d34de3082627c5f08b8ba05cc6c40d1",
+  "workflow_run": "36806513002"
 }
