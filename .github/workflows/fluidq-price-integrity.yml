@@ -50,6 +50,10 @@ jobs:
       - name: Apply full split and bonus adjustments
         run: |
           python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_price_adjustment_actions.csv             --out data/processed/adjusted/prices_adjusted_split_bonus.csv
+      - name: Audit post-adjustment corporate-action continuity
+        run: |
+          python scripts/audit_post_adjustment.py             --extremes results/price_quality/extreme_returns_raw.csv             --reconciliation results/price_quality/extreme_return_reconciliation.csv             --adjusted data/processed/adjusted/prices_adjusted_split_bonus.csv             --outdir results/price_quality/post_adjustment
+
       - name: Apply legacy 2022 adjustment proxy
         run: |
           python scripts/apply_verified_adjustments.py             --prices data/raw/stage_a_prices.csv             --actions data/input/verified_2022_corporate_actions.csv             --out data/processed/adjusted/prices_adjusted_2022_proxy.csv
