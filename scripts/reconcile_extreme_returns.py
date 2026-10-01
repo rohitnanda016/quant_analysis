@@ -4,14 +4,26 @@ import pandas as pd
 
 def parse_factor(purpose):
     p = str(purpose or "").upper()
-    m = re.search(r"FROM\s+RS\s*([0-9.]+).*?TO\s+RS\s*([0-9.]+)", p)
-    if m and ("SPLIT" in p or "CONSOLIDATION" in p or "SUB-DIVISION" in p):
-        old, new = float(m.group(1)), float(m.group(2))
-        return new / old, "split_or_consolidation"
+
+    # Observed factor is Prev Close / Ex-date Close. For a face-value
+    # subdivision from old to new, the price factor is old/new.
+    split_matches = re.findall(
+        r"FROM\s+RS\.?\s*([0-9.]+).*?TO\s+R?S?\.?\s*([0-9.]+)",
+        p
+    )
+    if split_matches and ("SPLIT" in p or "CONSOLIDATION" in p or "SUB-DIVISION" in p):
+        old, new = map(float, split_matches[-1])
+        if new > 0:
+            return old / new, "split_or_consolidation"
+
+    # Bonus x:y means x new shares for every y old shares. The price
+    # adjustment factor is (x+y)/y.
     m = re.search(r"BONUS\s+(\d+)\s*:\s*(\d+)", p)
     if m:
         x, y = int(m.group(1)), int(m.group(2))
-        return y / (x + y), "bonus"
+        if y > 0:
+            return (x + y) / y, "bonus"
+
     return None, None
 
 def aliases(path):
@@ -55,9 +67,6 @@ ca.columns = [
 ]
 ca["symbol"] = ca["symbol"].astype(str).str.upper().str.strip()
 ca["ex_date"] = pd.to_datetime(ca["ex_date"], errors="coerce")
-
-# NSE's current API uses "subject" for the corporate-action description.
-# Accept older/local "purpose" fields as well.
 ca["purpose"] = first_existing_series(ca, ["purpose", "subject"])
 ca[["inferred_factor", "action_type"]] = ca["purpose"].apply(
     lambda x: pd.Series(parse_factor(x))
@@ -98,7 +107,6 @@ m.loc[
     "status"
 ] = "ACTION_RATIO_MISMATCH"
 
-# Map current NSE names into the report names used by the original reconciler.
 if "rec_date" in m.columns and "record_date" not in m.columns:
     m["record_date"] = m["rec_date"]
 if "face_val" in m.columns and "face_value" not in m.columns:
@@ -113,8 +121,6 @@ cols = [
 cols = [c for c in cols if c in m.columns]
 m[cols].sort_values(["date", "symbol_extreme"]).to_csv(a.out, index=False)
 
-# Summarize at the extreme-event level. A symbol/date can have multiple
-# corporate-action records; prefer the strongest evidence for that event.
 rank = {
     "EXACT_SPLIT_BONUS_RATIO_MATCH": 0,
     "ACTION_ON_DATE_NON_PRICE_FACTOR": 1,
