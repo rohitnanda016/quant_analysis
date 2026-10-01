@@ -161,7 +161,7 @@ cols = [
     "factor_error", "status"
 ]
 cols = [c for c in cols if c in m.columns]
-m[cols].sort_values(["date", "lookup_symbol"]).to_csv(a.out, index=False)
+m[cols].sort_values(["date", "symbol_extreme"]).to_csv(a.out, index=False)
 
 rank = {
     "EXACT_SPLIT_BONUS_RATIO_MATCH": 0,
