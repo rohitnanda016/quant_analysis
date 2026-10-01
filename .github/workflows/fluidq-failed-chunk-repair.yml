@@ -37,52 +37,76 @@ jobs:
       - name: Repair SGPC and SHTV
         run: |
           python - <<'PY'
-          import time, sys
+          import io, time, requests
           import pandas as pd
-          sys.path.insert(0, "scripts")
-          from download_stage_a import get_chunk
 
-          path = "data/raw/stage_a_prices.csv"
-          out = path
-          base = pd.read_csv(path, low_memory=False)
-          base["date"] = pd.to_datetime(base["date"], errors="coerce")
-          base["symbol"] = base["symbol"].astype(str).str.strip().str.upper()
+          URL = "https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData"
 
-          parts = [base]
-          results = []
-          for sym in ["SGPC", "SHTV"]:
-              cur = pd.Timestamp("2014-01-01")
-              end = pd.Timestamp("2026-08-31")
-              while cur <= end:
-                  chunk_end = min(cur + pd.Timedelta(days=364), end)
-                  repaired = False
-                  last_error = None
-                  for attempt in range(1, 6):
-                      try:
-                          d, last_error = get_chunk(sym, cur, chunk_end, retries=1)
-                          if len(d):
-                              d["requested_symbol"] = sym
-                              d["source_symbol"] = sym
-                              parts.append(d)
-                              results.append({"symbol":sym,"start":str(cur.date()),"end":str(chunk_end.date()),"status":"repaired","rows":len(d),"attempt":attempt})
-                              repaired = True
-                              break
-                      except Exception as exc:
-                          last_error = str(exc)
-                      time.sleep(min(90, 5 * (2 ** (attempt - 1))))
-                  if not repaired:
-                      results.append({"symbol":sym,"start":str(cur.date()),"end":str(chunk_end.date()),"status":"failed","rows":0,"error":str(last_error)})
-                  time.sleep(3)
-                  cur = chunk_end + pd.Timedelta(days=1)
+          def clean(c):
+              c = str(c).replace("\ufeff","").replace("\xa0"," ").strip().strip('"')
+              return " ".join(c.split()).lower()
 
-          out_df = pd.concat(parts, ignore_index=True)
-          out_df = out_df.dropna(subset=["date","symbol"]).drop_duplicates(["date","symbol"]).sort_values(["date","symbol"])
-          out_df.to_csv(out, index=False)
-          repaired = sum(x["status"] == "repaired" for x in results)
-          failed = sum(x["status"] == "failed" for x in results)
-          print({"base_rows":len(base),"final_rows":len(out_df),"chunks":len(results),"repaired_chunks":repaired,"remaining_failed_chunks":failed})
-          if failed:
-              raise SystemExit("Repair still has failed chunks")
+          def get_chunk(sym, start, end):
+              params = {"symbol":sym,"from":start.strftime("%d-%m-%Y"),"to":end.strftime("%d-%m-%Y"),
+                        "series":"EQ","type":"priceVolumeDeliverable","csv":"true","dataType":"priceVolumeDeliverable"}
+              s = requests.Session()
+              s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"*/*","Referer":"https://www.nseindia.com/"})
+              try:
+                  s.get("https://www.nseindia.com/report-detail/eq_security",timeout=30)
+              except Exception:
+                  pass
+              last = "no response"
+              for attempt in range(5):
+                  try:
+                      r=s.get(URL,params=params,timeout=60)
+                      if r.status_code != 200:
+                          last=f"http_{r.status_code}"
+                      elif len(r.content)<=100:
+                          last=f"empty_http_200_{len(r.content)}"
+                      else:
+                          d=pd.read_csv(io.StringIO(r.content.decode("utf-8-sig","replace")),skipinitialspace=True)
+                          if not d.empty:
+                              d.columns=[clean(x) for x in d.columns]
+                              d=d.rename(columns={"symbol":"symbol","series":"series","date":"date","prev close":"prev_close",
+                                  "open price":"open","high price":"high","low price":"low","last price":"last",
+                                  "close price":"close","average price":"vwap","total traded quantity":"volume",
+                                  "turnover":"traded_value","no. of trades":"num_trades","deliverable qty":"deliverable_qty",
+                                  "% dly qt to traded qty":"deliverable_pct"})
+                              if {"date","close","symbol"}.issubset(d.columns):
+                                  d["date"]=pd.to_datetime(d["date"],errors="coerce",dayfirst=True)
+                                  d["symbol"]=d["symbol"].astype(str).str.strip().str.upper()
+                                  return d,last
+                              last="missing_required_columns"
+                          else: last="empty_dataframe"
+                  except Exception as e:
+                      last=f"{type(e).__name__}:{str(e)[:180]}"
+                  if attempt < 4: time.sleep(2**attempt)
+              return pd.DataFrame(),last
+
+          base=pd.read_csv("data/raw/stage_a_prices.csv",low_memory=False)
+          base["date"]=pd.to_datetime(base["date"],errors="coerce")
+          base["symbol"]=base["symbol"].astype(str).str.strip().str.upper()
+          parts=[base]; results=[]
+          for sym in ["SGPC","SHTV"]:
+              cur=pd.Timestamp("2014-01-01"); end=pd.Timestamp("2026-08-31")
+              while cur<=end:
+                  chunk_end=min(cur+pd.Timedelta(days=364),end)
+                  d,err=get_chunk(sym,cur,chunk_end)
+                  if len(d):
+                      d["requested_symbol"]=sym; d["source_symbol"]=sym
+                      parts.append(d)
+                      results.append({"symbol":sym,"start":str(cur.date()),"end":str(chunk_end.date()),"status":"repaired","rows":len(d),"error":None})
+                  else:
+                      results.append({"symbol":sym,"start":str(cur.date()),"end":str(chunk_end.date()),"status":"failed","rows":0,"error":err})
+                  time.sleep(3); cur=chunk_end+pd.Timedelta(days=1)
+
+          out=pd.concat(parts,ignore_index=True).dropna(subset=["date","symbol"]).drop_duplicates(["date","symbol"]).sort_values(["date","symbol"])
+          out.to_csv("data/raw/stage_a_prices.csv",index=False)
+          repaired=sum(x["status"]=="repaired" for x in results); failed=sum(x["status"]=="failed" for x in results)
+          print({"base_rows":len(base),"final_rows":len(out),"chunks":len(results),"repaired_chunks":repaired,"remaining_failed_chunks":failed})
+          import json
+          json.dump(results,open("data/raw/failed_chunk_repair.json","w"),indent=2)
+          if failed: raise SystemExit("Repair still has failed chunks")
           PY
 
       - name: Upload repaired dataset
