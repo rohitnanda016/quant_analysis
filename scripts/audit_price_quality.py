@@ -18,6 +18,7 @@ extreme_rows=[]; seen=set()
 
 for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols or c=="turnover_₹",chunksize=250000,low_memory=False):
     total += len(ch)
+    if "canonical_symbol" not in ch.columns: ch["canonical_symbol"]=ch["symbol"]
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
     if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns: ch["turnover_₹"]=ch["turnover ₹"]
     for c in ["prev_close","open","high","low","close","vwap","volume","turnover_₹"]:
