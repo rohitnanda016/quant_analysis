@@ -48,6 +48,7 @@ for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
             ch[c]=pd.to_numeric(ch[c].astype(str).str.replace(",","",regex=False).str.replace("₹","",regex=False).str.strip(),errors="coerce")
 
     factors=np.ones(len(ch),dtype=float)
+    prev_factors=np.ones(len(ch),dtype=float)
     for sym,idx in ch.groupby("canonical_symbol",sort=False).groups.items():
         if sym not in events:
             continue
@@ -55,21 +56,29 @@ for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
         positions=ch.index.get_indexer(idx)
         d=ch["date"].iloc[positions].to_numpy()
         vals=np.ones(len(positions),dtype=float)
+        prev_vals=np.ones(len(positions),dtype=float)
         for ex,f in zip(dates,fs):
             vals[d<ex] *= f
+            prev_vals[d<=ex] *= f
         factors[positions]=vals
+        prev_factors[positions]=prev_vals
 
     mask=factors!=1
     nonunit_rows += int(mask.sum())
     if mask.any():
         for c in price_cols:
-            if c in ch: ch.loc[mask,c]=ch.loc[mask,c]*factors[mask]
+            if c in ch:
+                ch.loc[mask,c]=ch.loc[mask,c]*factors[mask]
+        if "prev_close" in ch:
+            prev_mask=prev_factors!=1
+            ch.loc[prev_mask,"prev_close"]=ch.loc[prev_mask,"prev_close"]*prev_factors[prev_mask]
         if "volume" in ch:
             ch["volume"]=ch["volume"].astype(float)
             ch.loc[mask,"volume"]=ch.loc[mask,"volume"].to_numpy(dtype=float)/factors[mask]
         adjusted_rows += int(mask.sum())
 
     ch["adjustment_factor"]=factors
+    ch["prev_close_adjustment_factor"]=prev_factors
     ch["adjustment_method"]="verified_split_bonus_proxy"
     ch["dividend_adjustment"]="not_applied"
     ch.to_csv(outp,index=False,mode="w" if first else "a",header=first)
