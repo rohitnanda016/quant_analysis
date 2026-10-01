@@ -18,7 +18,7 @@ def parse_factor(purpose):
             action_types.append("bonus")
 
     split_matches = re.findall(
-        r"FROM\s+RS\.?\s*([0-9.]+).*?TO\s+R?S?\.?\s*([0-9.]+)",
+        r"FROM\s+RS\.?\s*([0-9.]+).*?TO\s+R(?:S|E)?\.?\s*([0-9.]+)",
         p
     )
     if split_matches and ("SPLIT" in p or "CONSOLIDATION" in p or "SUB-DIVISION" in p):
