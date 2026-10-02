@@ -48,9 +48,9 @@ jobs:
         run: python scripts/validate_fluidq_backtest.py
       - name: Audit execution and turnover
         run: |
-          python scripts/audit_execution_turnover.py \\
-            --signals results/backtest/rebalance_signals.csv \\
-            --portfolio results/backtest/portfolio_daily.csv \\
+          python scripts/audit_execution_turnover.py \
+            --signals results/backtest/rebalance_signals.csv \
+            --portfolio results/backtest/portfolio_daily.csv \
             --out results/backtest/execution_turnover_audit.json
       - name: Compare against Nifty 500 TRI
         run: |
