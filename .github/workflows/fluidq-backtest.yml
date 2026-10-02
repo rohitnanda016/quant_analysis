@@ -17,7 +17,7 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -52,13 +52,6 @@ jobs:
             --portfolio results/backtest/portfolio_daily.csv \
             --signals results/backtest/rebalance_signals.csv \
             --outdir results/backtest
-      - name: Run robustness sensitivity
-        run: |
-          python scripts/run_fluidq_robustness.py \
-            --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
-            --membership data/input/nifty500_membership.csv \
-            --events data/input/verified_corporate_events.csv \
-            --outdir results/backtest/robustness
       - name: Run sub-period and regime analysis
         run: |
           python scripts/run_fluidq_subperiods.py \
