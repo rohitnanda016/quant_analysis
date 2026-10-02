@@ -173,7 +173,15 @@ def main():
         if len(future)==0: continue
         execd=pd.Timestamp(future[0]); px2=df[df.symbol.isin(pos)&(df.date>=execd)&(df.date<=next_signal)].copy()
         if px2.empty: continue
-        piv=px2.pivot(index="date",columns="symbol",values="close").sort_index()\n        # Preserve intended equal weights; never renormalize because a selected name\n        # happens to be missing from a daily price panel.\n        price_returns=piv.pct_change(fill_method=None).reindex(columns=pos)\n        if set(pos)-set(price_returns.columns):\n            missing=sorted(set(pos)-set(price_returns.columns))\n            raise ValueError(f"Missing selected symbols in execution window {signal_date.date()}: {missing}")\n        rets=price_returns.mean(axis=1,skipna=False).fillna(0)*float(r.exposure); cost=float(r.turnover)*a.transaction_cost\n        if len(rets): rets.iloc[0]-=cost
+        piv=px2.pivot(index="date",columns="symbol",values="close").sort_index()
+        # Preserve intended equal weights; never renormalize because a selected name
+        # happens to be missing from a daily price panel.
+        price_returns=piv.pct_change(fill_method=None).reindex(columns=pos)
+        if set(pos)-set(price_returns.columns):
+            missing=sorted(set(pos)-set(price_returns.columns))
+            raise ValueError(f"Missing selected symbols in execution window {signal_date.date()}: {missing}")
+        rets=price_returns.mean(axis=1,skipna=False).fillna(0)*float(r.exposure); cost=float(r.turnover)*a.transaction_cost
+        if len(rets): rets.iloc[0]-=cost
         for dd,rr in rets.items(): daily.append((dd,float(rr),signal_date))
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"]); dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
