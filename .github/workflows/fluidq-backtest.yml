@@ -44,6 +44,8 @@ jobs:
             --membership data/input/nifty500_membership.csv \
             --events data/input/verified_corporate_events.csv \
             --outdir results/backtest
+      - name: Validate FLUID-Q V1 backtest
+        run: python scripts/validate_fluidq_backtest.py
       - name: Upload backtest results
         uses: actions/upload-artifact@v4
         with:
