@@ -22,7 +22,7 @@ def load_membership(path):
     end=find_col(m,["end_date"])
     m["effective_date"]=pd.to_datetime(m[start],errors="coerce") if start else pd.NaT
     if end: m["end_date"]=pd.to_datetime(m[end],errors="coerce")
-    return m[["symbol","effective_date"]]+(["end_date"] if "end_date" in m else [])
+    return m[["symbol","effective_date"] + (["end_date"] if "end_date" in m.columns else [])]
 
 def main():
     ap=argparse.ArgumentParser()
