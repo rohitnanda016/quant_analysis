@@ -7,7 +7,7 @@ import pandas as pd
 
 NIFTY500_YAHOO_URL = (
     "https://query1.finance.yahoo.com/v8/finance/chart/%5ECRSLDX"
-    "?period1=946684800&period2=1798761600&interval=1d&events=history"
+    "?range=max&interval=1d&events=history"
 )
 
 def find_col(df, candidates):
@@ -44,6 +44,10 @@ def load_nifty500_index():
     idx["nifty500_dma200"]=idx["nifty500_close"].rolling(200,min_periods=200).mean()
     if len(idx)<500:
         raise ValueError(f"Insufficient Nifty 500 index history: {len(idx)} rows")
+    if idx["date"].max() < pd.Timestamp("2026-08-01") or idx["date"].min() > pd.Timestamp("2015-01-01"):
+        raise ValueError(
+            f"Unexpected Nifty 500 index coverage: {idx.date.min().date()} to {idx.date.max().date()}"
+        )
     return idx
 
 def main():
