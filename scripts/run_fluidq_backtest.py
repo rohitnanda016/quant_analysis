@@ -28,6 +28,9 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--prices",required=True); ap.add_argument("--membership",required=True)
     ap.add_argument("--events",required=True); ap.add_argument("--outdir",required=True)
+    ap.add_argument("--top-n",type=int,default=15)
+    ap.add_argument("--transaction-cost",type=float,default=0.003)
+    ap.add_argument("--rebalance-frequency",choices=["monthly","quarterly"],default="monthly")
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 
     df=pd.read_csv(a.prices,low_memory=False)
@@ -63,7 +66,8 @@ def main():
     members=load_membership(a.membership)
     events=pd.read_csv(a.events); events["event_date"]=pd.to_datetime(events["event_date"],errors="coerce")
     corporate=set(events.loc[events.treatment=="corporate_event","symbol"].astype(str).str.upper())
-    reb_dates=df.groupby(df["date"].dt.to_period("M"))["date"].max().tolist()
+    period_key=df["date"].dt.to_period("M") if a.rebalance_frequency=="monthly" else df["date"].dt.to_period("Q")
+    reb_dates=df.groupby(period_key)["date"].max().tolist()
     snapshots=[]; holdings=set()
     price_dates=np.sort(df["date"].unique())
     for rd in reb_dates:
@@ -88,11 +92,11 @@ def main():
         chosen=[]
         for s in keep: chosen.append(s)
         for s in candidates.symbol:
-            if s not in chosen and len(chosen)<15: chosen.append(s)
+            if s not in chosen and len(chosen)<a.top_n: chosen.append(s)
         if len(chosen)<15:
             for s in eligible.symbol:
                 if s not in chosen and len(chosen)<15: chosen.append(s)
-        chosen=chosen[:15]
+        chosen=chosen[:a.top_n]
         breadth=float((snap["close"]>snap["dma200"]).mean())
         healthy=int(breadth>=.60)+int(float(snap["ret_6m"].median())>0)+int(float(snap["rs6"].median())>0)
         exposure={3:1.0,2:.75,1:.50,0:.25}[healthy]
@@ -118,7 +122,7 @@ def main():
         if px2.empty: continue
         piv=px2.pivot(index="date",columns="symbol",values="close").sort_index()
         rets=piv.pct_change().mean(axis=1).fillna(0)*float(r.exposure)
-        cost=float(r.turnover)*0.003
+        cost=float(r.turnover)*a.transaction_cost
         if len(rets): rets.iloc[0]-=cost
         for dd,rr in rets.items(): daily.append((dd,float(rr),signal_date))
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"])
@@ -131,6 +135,7 @@ def main():
     metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),
              "cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),
              "rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),
+             "top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,
              "note":"Sector momentum/sector caps are not applied because the supplied point-in-time membership artifact contains no verified historical sector field; weights are therefore renormalized over the five available cross-sectional factors."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False)
     (out/"metrics.json").write_text(json.dumps(metrics,indent=2))
