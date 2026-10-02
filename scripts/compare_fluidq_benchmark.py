@@ -1,18 +1,49 @@
-import argparse, json
+import argparse, json, time
 from pathlib import Path
 import requests, pandas as pd, numpy as np
 
+TRI_URL="https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString"
+
 def fetch_tri(start,end):
     payload={"cinfo":f"{{'name':'NIFTY 500','startDate':'{start}','endDate':'{end}','indexName':'NIFTY 500'}}"}
-    r=requests.post(
-      "https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString",
-      headers={"Content-Type":"application/json; charset=UTF-8","X-Requested-With":"XMLHttpRequest",
-               "Referer":"https://www.niftyindices.com/reports/historical-data",
-               "User-Agent":"Mozilla/5.0"},
-      json=payload,timeout=60)
-    r.raise_for_status()
-    rows=json.loads(r.json()["d"])
-    return pd.DataFrame(rows)
+    headers={
+        "Content-Type":"application/json; charset=UTF-8",
+        "Accept":"application/json, text/javascript, */*; q=0.01",
+        "Accept-Language":"en-US,en;q=0.9",
+        "X-Requested-With":"XMLHttpRequest",
+        "Origin":"https://www.niftyindices.com",
+        "Referer":"https://www.niftyindices.com/reports/historical-data",
+        "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+    }
+    session=requests.Session()
+    session.headers.update(headers)
+    # Warm the session so the endpoint receives the same basic cookies as the
+    # public historical-data page. The endpoint has been observed to return
+    # HTML/non-JSON intermittently when called without a warmed session.
+    for attempt in range(4):
+        try:
+            session.get("https://www.niftyindices.com/reports/historical-data",timeout=30)
+            r=session.post(TRI_URL,json=payload,timeout=60)
+            r.raise_for_status()
+            try:
+                outer=r.json()
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Nifty TRI endpoint returned non-JSON (HTTP {r.status_code}, "
+                    f"content-type={r.headers.get('content-type')}, "
+                    f"prefix={r.text[:120]!r})"
+                ) from exc
+            raw=outer.get("d") if isinstance(outer,dict) else None
+            if raw in (None,"","[]","false"):
+                raise RuntimeError(f"Nifty TRI endpoint returned no data: {raw!r}")
+            rows=json.loads(raw)
+            if not rows:
+                raise RuntimeError("Nifty TRI endpoint returned an empty dataset")
+            return pd.DataFrame(rows)
+        except (requests.RequestException, RuntimeError) as exc:
+            if attempt==3:
+                raise
+            time.sleep(2**attempt)
 
 def stats(ret):
     ret=ret.dropna()
@@ -36,10 +67,9 @@ def main():
     s=pd.read_csv(a.signals,parse_dates=["date"]).sort_values("date")
     start=p.date.min().strftime("%d-%b-%Y"); end=p.date.max().strftime("%d-%b-%Y")
     tri=fetch_tri(start,end)
-    if tri.empty: raise ValueError("Nifty 500 TRI returned no rows")
     tri.columns=[str(x).strip().lower().replace(" ","_") for x in tri.columns]
     date_col=next(c for c in tri.columns if "date" in c)
-    val_col=next(c for c in tri.columns if c in ("index_value","close","value","index_close") or ("index" in c and "value" in c))
+    val_col=next(c for c in tri.columns if c in ("totalreturnsindex","total_returns_index","index_value","value") or "total" in c and "return" in c)
     tri["date"]=pd.to_datetime(tri[date_col],dayfirst=True,errors="coerce")
     tri["value"]=pd.to_numeric(tri[val_col],errors="coerce")
     tri=tri.dropna(subset=["date","value"]).sort_values("date").drop_duplicates("date")
@@ -54,13 +84,8 @@ def main():
     missing=int(m.exposure.isna().sum())
     if missing:
         raise ValueError(f"Missing regime exposure for {missing} portfolio rows")
-
-    # Apply the exact regime exposure associated with the signal that generated each execution-day return.
     m["matched_bench_ret"]=m.ret_nifty500tri*m.exposure
     matched=stats(m.matched_bench_ret)
-
-    # A daily active-return series is informative, but the primary comparison is the
-    # full and regime-matched benchmark CAGR calculated above.
     active=(1+m.ret_fluidq)/(1+m.ret_nifty500tri)-1
     active_stats=stats(active)
 
