@@ -9,7 +9,7 @@ def parse_factor(text):
         y = int(y)
         if y:
             parts.append(((int(x) + y) / y, "bonus"))
-    for old, new in re.findall(r"FROM\s+RS\.?\s*([0-9.]+).*?TO\s+R(?:S|E)?\.?\s*([0-9.]+)", p):
+    for old, new in re.findall(r"(?:FROM|FRM)\s+RS\.?\s*([0-9.]+).*?TO\s+R(?:S|E)?\.?\s*([0-9.]+)", p):
         old, new = float(old), float(new)
         if new and any(k in p for k in ("SPLIT", "CONSOLIDATION", "SUB-DIVISION")):
             parts.append((old / new, "split_or_consolidation"))
