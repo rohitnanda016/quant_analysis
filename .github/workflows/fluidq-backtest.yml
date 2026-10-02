@@ -48,9 +48,9 @@ jobs:
         run: python scripts/validate_fluidq_backtest.py
       - name: Compare against Nifty 500 TRI
         run: |
-          python scripts/compare_fluidq_benchmark.py \\
-            --portfolio results/backtest/portfolio_daily.csv \\
-            --signals results/backtest/rebalance_signals.csv \\
+          python scripts/compare_fluidq_benchmark.py \
+            --portfolio results/backtest/portfolio_daily.csv \
+            --signals results/backtest/rebalance_signals.csv \
             --outdir results/backtest
       - name: Upload backtest results
         uses: actions/upload-artifact@v4
