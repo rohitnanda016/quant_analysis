@@ -34,6 +34,13 @@ def main():
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 
     df=pd.read_csv(a.prices,low_memory=False)
+    # The adjusted artifact may retain both historical and canonical symbol fields.
+    # Resolve duplicate column names deterministically before feature calculation.
+    if list(df.columns).count("symbol") > 1:
+        dup=[i for i,c in enumerate(df.columns) if c=="symbol"]
+        df["symbol"]=df.iloc[:,dup[-1]]
+        keep=[i for i,c in enumerate(df.columns) if c!="symbol" or i==dup[-1]]
+        df=df.iloc[:,keep]
     datec=find_col(df,["date"]); symc=find_col(df,["canonical_symbol","symbol"])
     closec=find_col(df,["close"]); vwapc=find_col(df,["vwap"])
     turnc=find_col(df,["turnover_₹","turnover","turnover_rs"])
