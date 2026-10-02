@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - ".github/workflows/fluidq-robustness.yml"
+      - "scripts/run_fluidq_backtest.py"
+      - "scripts/run_fluidq_robustness.py"
   workflow_dispatch:
     inputs:
       integrity_run_id:
