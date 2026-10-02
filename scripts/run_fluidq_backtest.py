@@ -1,7 +1,14 @@
 import argparse, json
 from pathlib import Path
+from urllib.request import Request, urlopen
+
 import numpy as np
 import pandas as pd
+
+NIFTY500_YAHOO_URL = (
+    "https://query1.finance.yahoo.com/v8/finance/chart/%5ECRSLDX"
+    "?period1=946684800&period2=1798761600&interval=1d&events=history"
+)
 
 def find_col(df, candidates):
     low={c.lower().strip():c for c in df.columns}
@@ -24,6 +31,21 @@ def load_membership(path):
     if end: m["end_date"]=pd.to_datetime(m[end],errors="coerce")
     return m[["symbol","effective_date"] + (["end_date"] if "end_date" in m.columns else [])]
 
+def load_nifty500_index():
+    req=Request(NIFTY500_YAHOO_URL,headers={"User-Agent":"Mozilla/5.0"})
+    with urlopen(req,timeout=30) as response:
+        payload=json.loads(response.read().decode("utf-8"))
+    result=payload["chart"]["result"][0]
+    dates=pd.to_datetime(result["timestamp"],unit="s").tz_localize(None)
+    close=pd.to_numeric(result["indicators"]["quote"][0]["close"],errors="coerce")
+    idx=pd.DataFrame({"date":dates,"nifty500_close":close}).dropna()
+    idx=idx.sort_values("date").drop_duplicates("date")
+    idx["nifty500_ret_6m"]=idx["nifty500_close"].pct_change(126)
+    idx["nifty500_dma200"]=idx["nifty500_close"].rolling(200,min_periods=200).mean()
+    if len(idx)<500:
+        raise ValueError(f"Insufficient Nifty 500 index history: {len(idx)} rows")
+    return idx
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--prices",required=True); ap.add_argument("--membership",required=True)
@@ -38,8 +60,6 @@ def main():
     closec=find_col(df,["close"]); vwapc=find_col(df,["vwap"])
     turnc=find_col(df,["turnover_₹","turnover","turnover_rs"])
     if not all([datec,symc,closec]): raise ValueError("Required price columns missing")
-    # Prefer canonical_symbol when present. Drop the legacy symbol column before
-    # renaming to avoid pandas creating duplicate column labels.
     if symc != "symbol" and "symbol" in df.columns:
         df=df.drop(columns=["symbol"])
     ren={datec:"date",symc:"symbol",closec:"close"}
@@ -54,6 +74,7 @@ def main():
     for c in ["close","vwap","turnover"]:
         if c in df: df[c]=pd.to_numeric(df[c],errors="coerce")
     df=df.sort_values(["symbol","date"]).drop_duplicates(["symbol","date"])
+
     g=df.groupby("symbol",sort=False)
     df["ret_6m"]=g["close"].pct_change(126)
     df["ret_12m_ex1m"]=g["close"].shift(21).div(g["close"].shift(252))-1
@@ -63,6 +84,9 @@ def main():
     df["ram"]=df["ret_6m"]/df["vol126"].replace(0,np.nan)
     df["adv60"]=g["turnover"].transform(lambda s:s.rolling(60,min_periods=40).mean()) if "turnover" in df else np.nan
 
+    nifty=load_nifty500_index()
+    df=df.merge(nifty[["date","nifty500_close","nifty500_ret_6m","nifty500_dma200"]],on="date",how="left")
+
     members=load_membership(a.membership)
     events=pd.read_csv(a.events); events["event_date"]=pd.to_datetime(events["event_date"],errors="coerce")
     corporate=set(events.loc[events.treatment=="corporate_event","symbol"].astype(str).str.upper())
@@ -70,6 +94,7 @@ def main():
     reb_dates=df.groupby(period_key)["date"].max().tolist()
     snapshots=[]; holdings=set()
     price_dates=np.sort(df["date"].unique())
+
     for rd in reb_dates:
         snap=df[df.date==rd].copy()
         if snap.empty: continue
@@ -78,38 +103,55 @@ def main():
             if not mm.empty:
                 latest=mm.groupby("symbol")["effective_date"].max().reset_index()
                 snap=snap.merge(latest,on="symbol",how="inner")
-        med6=snap["ret_6m"].median(); snap["rs6"]=snap["ret_6m"]-med6
+
+        nifty6=float(snap["nifty500_ret_6m"].iloc[0]) if snap["nifty500_ret_6m"].notna().any() else np.nan
+        nifty_dma=float(snap["nifty500_dma200"].iloc[0]) if snap["nifty500_dma200"].notna().any() else np.nan
+        snap["rs6"]=snap["ret_6m"]-nifty6
+
         cols=["ret_6m","ret_12m_ex1m","rs6","trend","ram"]
         for c in cols: snap[c+"_pct"]=snap[c].rank(pct=True)*100
         snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+
                        snap["rs6_pct"]*.20+snap["trend_pct"]*.20+snap["ram_pct"]*.15)/.90
+
         eligible=snap[(snap["close"]>snap["dma200"])&(snap["ret_6m"]>0)&(snap["rs6"]>0)]
         if "adv60" in snap: eligible=eligible[eligible["adv60"]>=1e8]
         eligible=eligible.sort_values(["score","ret_6m"],ascending=False)
         eligible=eligible.assign(rank=eligible["score"].rank(method="first",ascending=False))
-        keep=[s for s in holdings if s in set(eligible.loc[eligible.score>=65,"symbol"]) and s in set(eligible.loc[eligible["rank"]<=30,"symbol"])]
+
+        eligible_set=set(eligible["symbol"])
+        keep=[s for s in holdings if s in eligible_set and
+              s in set(eligible.loc[eligible.score>=65,"symbol"]) and
+              s in set(eligible.loc[eligible["rank"]<=30,"symbol"])]
         candidates=eligible[(eligible.score>=75)&(eligible["rank"]<=30)]
+
         chosen=[]
         for s in keep: chosen.append(s)
         for s in candidates.symbol:
             if s not in chosen and len(chosen)<a.top_n: chosen.append(s)
-        if len(chosen)<15:
-            for s in eligible.symbol:
-                if s not in chosen and len(chosen)<15: chosen.append(s)
+        # Do NOT fill below the stated entry threshold. Holding fewer than top-N
+        # is intentional when the market does not offer enough qualifying stocks.
         chosen=chosen[:a.top_n]
+
         breadth=float((snap["close"]>snap["dma200"]).mean())
-        healthy=int(breadth>=.60)+int(float(snap["ret_6m"].median())>0)+int(float(snap["rs6"].median())>0)
+        healthy=int(breadth>=.60)+int(nifty6>0)+int(nifty_dma>0 and float(snap["nifty500_close"].iloc[0])>nifty_dma)
         exposure={3:1.0,2:.75,1:.50,0:.25}[healthy]
+
         day_events=set(events.loc[events.event_date==rd,"symbol"].astype(str).str.upper())
         chosen=[s for s in chosen if not (s in corporate and s in day_events)]
-        turnover=(len(set(chosen)^set(holdings))/2)/max(len(chosen),1)
-        snapshots.append({"date":rd,"n_eligible":len(eligible),"holdings":",".join(chosen),
-                          "exposure":exposure,"regime_healthy":healthy,"breadth":breadth,
-                          "median_6m":float(snap.ret_6m.median()),"turnover":turnover})
+        turnover=(len(set(chosen)^set(holdings))/2)/max(len(chosen),1) if chosen else (1.0 if holdings else 0.0)
+
+        snapshots.append({
+            "date":rd,"n_eligible":len(eligible),"holdings":",".join(chosen),
+            "exposure":exposure,"regime_healthy":healthy,"breadth":breadth,
+            "nifty500_ret_6m":nifty6,"nifty500_above_dma200":bool(nifty_dma>0 and float(snap["nifty500_close"].iloc[0])>nifty_dma),
+            "turnover":turnover
+        })
         holdings=set(chosen)
+
     sig=pd.DataFrame(snapshots)
     if sig.empty: raise ValueError("No rebalance snapshots produced")
     sig["date"]=pd.to_datetime(sig.date); daily=[]
+
     for i,r in sig.iterrows():
         signal_date=pd.Timestamp(r.date)
         next_signal=pd.Timestamp(sig.iloc[i+1].date) if i+1<len(sig) else pd.Timestamp(price_dates[-1])
@@ -125,6 +167,7 @@ def main():
         cost=float(r.turnover)*a.transaction_cost
         if len(rets): rets.iloc[0]-=cost
         for dd,rr in rets.items(): daily.append((dd,float(rr),signal_date))
+
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"])
     dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
@@ -132,12 +175,19 @@ def main():
     years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25
     cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan
     peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),
-             "cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),
-             "rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),
-             "top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,
-             "note":"Sector momentum/sector caps are not applied because the supplied point-in-time membership artifact contains no verified historical sector field; weights are therefore renormalized over the five available cross-sectional factors."}
-    sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False)
+
+    metrics={
+        "start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),
+        "cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),
+        "rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),
+        "top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,
+        "relative_strength_source":"Nifty 500 price index ^CRSLDX via Yahoo Finance chart API",
+        "relative_strength_definition":"stock 6M return minus Nifty 500 6M price return",
+        "regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA",
+        "note":"Sector momentum/sector caps are not applied because the supplied point-in-time membership artifact contains no verified historical sector field; weights are therefore renormalized over the five available cross-sectional factors."
+    }
+    sig.to_csv(out/"rebalance_signals.csv",index=False)
+    dr.to_csv(out/"portfolio_daily.csv",index=False)
     (out/"metrics.json").write_text(json.dumps(metrics,indent=2))
     print(json.dumps(metrics,indent=2))
 
