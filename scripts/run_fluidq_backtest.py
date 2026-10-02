@@ -20,12 +20,9 @@ def load_membership(path):
     m["symbol"]=m["symbol"].astype(str).str.upper().str.strip()
     start=find_col(m,["review_date","effective_date","start_date","date"])
     end=find_col(m,["end_date"])
-    if start:
-        m["effective_date"]=pd.to_datetime(m[start],errors="coerce")
-    else:
-        m["effective_date"]=pd.NaT
+    m["effective_date"]=pd.to_datetime(m[start],errors="coerce") if start else pd.NaT
     if end: m["end_date"]=pd.to_datetime(m[end],errors="coerce")
-    return m[["symbol","effective_date"]+([ "end_date"] if "end_date" in m else [])]
+    return m[["symbol","effective_date"]]+(["end_date"] if "end_date" in m else [])
 
 def main():
     ap=argparse.ArgumentParser()
@@ -34,22 +31,23 @@ def main():
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 
     df=pd.read_csv(a.prices,low_memory=False)
-    # The adjusted artifact may retain both historical and canonical symbol fields.
-    # Resolve duplicate column names deterministically before feature calculation.
-    if list(df.columns).count("symbol") > 1:
-        dup=[i for i,c in enumerate(df.columns) if c=="symbol"]
-        df["symbol"]=df.iloc[:,dup[-1]]
-        keep=[i for i,c in enumerate(df.columns) if c!="symbol" or i==dup[-1]]
-        df=df.iloc[:,keep]
     datec=find_col(df,["date"]); symc=find_col(df,["canonical_symbol","symbol"])
     closec=find_col(df,["close"]); vwapc=find_col(df,["vwap"])
     turnc=find_col(df,["turnover_₹","turnover","turnover_rs"])
     if not all([datec,symc,closec]): raise ValueError("Required price columns missing")
+    # Prefer canonical_symbol when present. Drop the legacy symbol column before
+    # renaming to avoid pandas creating duplicate column labels.
+    if symc != "symbol" and "symbol" in df.columns:
+        df=df.drop(columns=["symbol"])
     ren={datec:"date",symc:"symbol",closec:"close"}
     if vwapc: ren[vwapc]="vwap"
     if turnc: ren[turnc]="turnover"
     df=df.rename(columns=ren)
-    df["date"]=pd.to_datetime(df["date"]); df["symbol"]=df["symbol"].astype(str).str.upper().str.strip()
+    if list(df.columns).count("symbol")>1:
+        inds=[i for i,c in enumerate(df.columns) if c=="symbol"]
+        df=df.iloc[:,[i for i,c in enumerate(df.columns) if c!="symbol" or i==inds[-1]]]
+    df["date"]=pd.to_datetime(df["date"])
+    df["symbol"]=df["symbol"].astype(str).str.upper().str.strip()
     for c in ["close","vwap","turnover"]:
         if c in df: df[c]=pd.to_numeric(df[c],errors="coerce")
     df=df.sort_values(["symbol","date"]).drop_duplicates(["symbol","date"])
@@ -60,29 +58,23 @@ def main():
     df["trend"]=df["close"]/df["dma200"]-1
     df["vol126"]=g["close"].transform(lambda s:s.pct_change().rolling(126,min_periods=100).std())*np.sqrt(252)
     df["ram"]=df["ret_6m"]/df["vol126"].replace(0,np.nan)
-    if "turnover" in df:
-        df["adv60"]=g["turnover"].transform(lambda s:s.rolling(60,min_periods=40).mean())
-    else: df["adv60"]=np.nan
+    df["adv60"]=g["turnover"].transform(lambda s:s.rolling(60,min_periods=40).mean()) if "turnover" in df else np.nan
 
     members=load_membership(a.membership)
     events=pd.read_csv(a.events); events["event_date"]=pd.to_datetime(events["event_date"],errors="coerce")
     corporate=set(events.loc[events.treatment=="corporate_event","symbol"].astype(str).str.upper())
-    # Monthly rebalance dates: last observed trading day in each calendar month.
     reb_dates=df.groupby(df["date"].dt.to_period("M"))["date"].max().tolist()
-    snapshots=[]; holdings=set(); nav=1.0; daily=[]
+    snapshots=[]; holdings=set()
     price_dates=np.sort(df["date"].unique())
     for rd in reb_dates:
         snap=df[df.date==rd].copy()
         if snap.empty: continue
-        # Point-in-time membership: latest membership review at or before rebalance.
         if members["effective_date"].notna().any():
             mm=members[members.effective_date<=rd]
             if not mm.empty:
                 latest=mm.groupby("symbol")["effective_date"].max().reset_index()
                 snap=snap.merge(latest,on="symbol",how="inner")
-        # Cross-sectional relative strength proxy versus contemporaneous universe median.
-        med6=snap["ret_6m"].median()
-        snap["rs6"]=snap["ret_6m"]-med6
+        med6=snap["ret_6m"].median(); snap["rs6"]=snap["ret_6m"]-med6
         cols=["ret_6m","ret_12m_ex1m","rs6","trend","ram"]
         for c in cols: snap[c+"_pct"]=snap[c].rank(pct=True)*100
         snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+
@@ -90,10 +82,8 @@ def main():
         eligible=snap[(snap["close"]>snap["dma200"])&(snap["ret_6m"]>0)&(snap["rs6"]>0)]
         if "adv60" in snap: eligible=eligible[eligible["adv60"]>=1e8]
         eligible=eligible.sort_values(["score","ret_6m"],ascending=False)
-        rank=eligible["score"].rank(method="first",ascending=False)
-        eligible=eligible.assign(rank=rank)
-        keep=[s for s in holdings if s in set(eligible.loc[eligible.score>=65,"symbol"]) and
-              s in set(eligible.loc[eligible["rank"]<=30,"symbol"])]
+        eligible=eligible.assign(rank=eligible["score"].rank(method="first",ascending=False))
+        keep=[s for s in holdings if s in set(eligible.loc[eligible.score>=65,"symbol"]) and s in set(eligible.loc[eligible["rank"]<=30,"symbol"])]
         candidates=eligible[(eligible.score>=75)&(eligible["rank"]<=30)]
         chosen=[]
         for s in keep: chosen.append(s)
@@ -103,11 +93,9 @@ def main():
             for s in eligible.symbol:
                 if s not in chosen and len(chosen)<15: chosen.append(s)
         chosen=chosen[:15]
-        # Market regime proxy: breadth, median 6M momentum, median RS.
         breadth=float((snap["close"]>snap["dma200"]).mean())
         healthy=int(breadth>=.60)+int(float(snap["ret_6m"].median())>0)+int(float(snap["rs6"].median())>0)
         exposure={3:1.0,2:.75,1:.50,0:.25}[healthy]
-        # Exclude securities with explicit demerger/scheme event on the rebalance date.
         day_events=set(events.loc[events.event_date==rd,"symbol"].astype(str).str.upper())
         chosen=[s for s in chosen if not (s in corporate and s in day_events)]
         turnover=(len(set(chosen)^set(holdings))/2)/max(len(chosen),1)
@@ -117,9 +105,7 @@ def main():
         holdings=set(chosen)
     sig=pd.DataFrame(snapshots)
     if sig.empty: raise ValueError("No rebalance snapshots produced")
-    # Build daily equal-weight portfolio, one signal active until the next rebalance.
-    sig["date"]=pd.to_datetime(sig.date)
-    daily=[]
+    sig["date"]=pd.to_datetime(sig.date); daily=[]
     for i,r in sig.iterrows():
         signal_date=pd.Timestamp(r.date)
         next_signal=pd.Timestamp(sig.iloc[i+1].date) if i+1<len(sig) else pd.Timestamp(price_dates[-1])
@@ -128,8 +114,7 @@ def main():
         future=price_dates[price_dates>signal_date]
         if len(future)==0: continue
         execd=pd.Timestamp(future[0])
-        endd=next_signal
-        px2=df[df.symbol.isin(pos)&(df.date>=execd)&(df.date<=endd)].copy()
+        px2=df[df.symbol.isin(pos)&(df.date>=execd)&(df.date<=next_signal)].copy()
         if px2.empty: continue
         piv=px2.pivot(index="date",columns="symbol",values="close").sort_index()
         rets=piv.pct_change().mean(axis=1).fillna(0)*float(r.exposure)
