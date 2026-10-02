@@ -1,6 +1,7 @@
 import argparse, json, time
 from pathlib import Path
 import requests, pandas as pd, numpy as np
+import cloudscraper
 
 TRI_URL="https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString"
 
@@ -9,41 +10,34 @@ def fetch_tri(start,end):
     headers={
         "Content-Type":"application/json; charset=UTF-8",
         "Accept":"application/json, text/javascript, */*; q=0.01",
-        "Accept-Language":"en-US,en;q=0.9",
         "X-Requested-With":"XMLHttpRequest",
-        "Origin":"https://www.niftyindices.com",
         "Referer":"https://www.niftyindices.com/reports/historical-data",
-        "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+        "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
-    session=requests.Session()
-    session.headers.update(headers)
-    # Warm the session so the endpoint receives the same basic cookies as the
-    # public historical-data page. The endpoint has been observed to return
-    # HTML/non-JSON intermittently when called without a warmed session.
+    scraper=cloudscraper.create_scraper(
+        browser={"browser":"chrome","platform":"linux","mobile":False}
+    )
+    scraper.headers.update(headers)
+    last_error=None
     for attempt in range(4):
         try:
-            session.get("https://www.niftyindices.com/reports/historical-data",timeout=30)
-            r=session.post(TRI_URL,json=payload,timeout=60)
+            scraper.get("https://www.niftyindices.com/reports/historical-data",timeout=20)
+            r=scraper.post(TRI_URL,json=payload,timeout=90)
             r.raise_for_status()
-            try:
-                outer=r.json()
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"Nifty TRI endpoint returned non-JSON (HTTP {r.status_code}, "
-                    f"content-type={r.headers.get('content-type')}, "
-                    f"prefix={r.text[:120]!r})"
-                ) from exc
+            outer=r.json()
             raw=outer.get("d") if isinstance(outer,dict) else None
-            if raw in (None,"","[]","false"):
-                raise RuntimeError(f"Nifty TRI endpoint returned no data: {raw!r}")
+            if not raw:
+                raise RuntimeError(f"Nifty TRI returned no data: {raw!r}")
             rows=json.loads(raw)
             if not rows:
-                raise RuntimeError("Nifty TRI endpoint returned an empty dataset")
+                raise RuntimeError("Nifty TRI returned an empty dataset")
             return pd.DataFrame(rows)
-        except (requests.RequestException, RuntimeError) as exc:
-            if attempt==3:
-                raise
-            time.sleep(2**attempt)
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            last_error=exc
+            if attempt<3:
+                time.sleep(2**attempt)
+    raise RuntimeError(f"Unable to retrieve Nifty 500 TRI after retries: {last_error}")
 
 def stats(ret):
     ret=ret.dropna()
@@ -69,7 +63,7 @@ def main():
     tri=fetch_tri(start,end)
     tri.columns=[str(x).strip().lower().replace(" ","_") for x in tri.columns]
     date_col=next(c for c in tri.columns if "date" in c)
-    val_col=next(c for c in tri.columns if c in ("totalreturnsindex","total_returns_index","index_value","value") or "total" in c and "return" in c)
+    val_col=next(c for c in tri.columns if c in ("totalreturnsindex","total_returns_index","index_value","value") or ("total" in c and "return" in c))
     tri["date"]=pd.to_datetime(tri[date_col],dayfirst=True,errors="coerce")
     tri["value"]=pd.to_numeric(tri[val_col],errors="coerce")
     tri=tri.dropna(subset=["date","value"]).sort_values("date").drop_duplicates("date")
