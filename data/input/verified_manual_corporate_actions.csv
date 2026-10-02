@@ -1,2 +1,6 @@
 symbol,ex_date,subject,inferred_factor,action_type,source,confidence
 ITDCEM,2015-08-21,Face Value Split From Rs 10 To Rs 1,10.0,split,ITD Cementation split history,high
+HEG,2024-10-18,Face Value Split From Rs 10 To Rs 2,5.0,split,HEG split history / NSE ex-split evidence,high
+NBVENTURES,2016-09-01,Bonus 1:1,2.0,bonus,Moneycontrol corporate-action report,high
+AMIORG,2025-04-25,Face Value Split From Rs 10 To Rs 5,2.0,split,NSDL/BSE split notice and Mint ex-split report,high
+ESSELPACK,2018-06-20,Bonus 1:1,2.0,bonus,EPL corporate-action/research record,high
