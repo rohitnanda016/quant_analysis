@@ -48,7 +48,7 @@ def main():
     df=df.sort_values(["symbol","date"]).drop_duplicates(["symbol","date"])
     g=df.groupby("symbol",sort=False)
     df["ret_6m"]=g["close"].pct_change(126)
-    df["ret_12m_ex1m"]=g["close"].pct_change(252).div(1+g["close"].pct_change(21))-0 # approximation, later ranked
+    df["ret_12m_ex1m"]=g["close"].shift(21).div(g["close"].shift(252))-1
     df["dma200"]=g["close"].transform(lambda s:s.rolling(200,min_periods=200).mean())
     df["trend"]=df["close"]/df["dma200"]-1
     df["vol126"]=g["close"].transform(lambda s:s.pct_change().rolling(126,min_periods=100).std())*np.sqrt(252)
@@ -110,25 +110,27 @@ def main():
         holdings=set(chosen)
     sig=pd.DataFrame(snapshots)
     if sig.empty: raise ValueError("No rebalance snapshots produced")
-    # Build daily equal-weight portfolio from signal holdings, using next trading day's VWAP as execution proxy.
+    # Build daily equal-weight portfolio, one signal active until the next rebalance.
     sig["date"]=pd.to_datetime(sig.date)
-    for _,r in sig.iterrows():
-        d=pd.Timestamp(r.date); pos=[x for x in str(r.holdings).split(",") if x]
+    daily=[]
+    for i,r in sig.iterrows():
+        signal_date=pd.Timestamp(r.date)
+        next_signal=pd.Timestamp(sig.iloc[i+1].date) if i+1<len(sig) else pd.Timestamp(price_dates[-1])
+        pos=[x for x in str(r.holdings).split(",") if x]
         if not pos: continue
-        future=price_dates[price_dates>d]
+        future=price_dates[price_dates>signal_date]
         if len(future)==0: continue
         execd=pd.Timestamp(future[0])
-        px=df[(df.date==execd)&df.symbol.isin(pos)].copy()
-        if px.empty: continue
-        daily_ret=float(px["close"].pct_change().mean()) if False else np.nan
-        # Record execution basket; daily NAV is approximated from equal-weight close-to-close returns.
-        px2=df[df.symbol.isin(pos)&(df.date>=execd)].copy()
+        endd=next_signal
+        px2=df[df.symbol.isin(pos)&(df.date>=execd)&(df.date<=endd)].copy()
+        if px2.empty: continue
         piv=px2.pivot(index="date",columns="symbol",values="close").sort_index()
         rets=piv.pct_change().mean(axis=1).fillna(0)*float(r.exposure)
         cost=float(r.turnover)*0.003
         if len(rets): rets.iloc[0]-=cost
-        for dd,rr in rets.items(): daily.append((dd,float(rr),d))
-    dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).drop_duplicates("date").sort_values("date")
+        for dd,rr in rets.items(): daily.append((dd,float(rr),signal_date))
+    dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"])
+    dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod()
     years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25
