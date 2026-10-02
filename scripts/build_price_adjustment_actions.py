@@ -11,7 +11,13 @@ def parse_factor(text):
             parts.append(((int(x) + y) / y, "bonus"))
     for old, new in re.findall(r"(?:FROM|FRM)\s+RS\.?\s*([0-9.]+).*?TO\s+R(?:S|E)?\.?\s*([0-9.]+)", p):
         old, new = float(old), float(new)
-        if new and any(k in p for k in ("SPLIT", "CONSOLIDATION", "SUB-DIVISION")):
+        if new and any(k in p for k in ("SPLIT", "SPLT", "CONSOLIDATION", "SUB-DIVISION")):
+            parts.append((old / new, "split_or_consolidation"))
+    # NSE also publishes abbreviated face-value split descriptions without
+    # the words FROM/FRM, e.g. "Face Value Split Rs.10/- To Re.1/- Per Share".
+    for old, new in re.findall(r"(?:FACE\s+VALUE\s+)?SPLIT\s+RS\.?\s*([0-9.]+).*?TO\s+R(?:S|E)?\.?\s*([0-9.]+)", p):
+        old, new = float(old), float(new)
+        if new:
             parts.append((old / new, "split_or_consolidation"))
     if not parts:
         return None, None
