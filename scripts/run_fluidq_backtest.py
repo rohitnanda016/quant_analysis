@@ -125,9 +125,18 @@ def main():
         snap=df[df.date==rd].copy()
         if snap.empty: continue
         if members["effective_date"].notna().any():
-            mm=members[members.effective_date<=rd]
+            mm=members[members.effective_date<=rd].copy()
             if not mm.empty:
-                latest=mm.groupby("symbol")["effective_date"].max().reset_index(); snap=snap.merge(latest,on="symbol",how="inner")
+                if "end_date" in mm.columns:
+                    mm=mm[(mm["end_date"].isna()) | (mm["end_date"]>=rd)]
+                    active=mm[["symbol"]].drop_duplicates()
+                else:
+                    # Snapshot-form PIT file: each review date contains the full
+                    # constituent set. Use only the latest snapshot as of rd;
+                    # do not carry exited constituents forward indefinitely.
+                    latest_review=mm["effective_date"].max()
+                    active=mm.loc[mm["effective_date"].eq(latest_review),["symbol"]].drop_duplicates()
+                snap=snap.merge(active,on="symbol",how="inner")
         nifty6=float(snap["nifty500_ret_6m"].iloc[0]) if snap["nifty500_ret_6m"].notna().any() else np.nan
         nifty_dma=float(snap["nifty500_dma200"].iloc[0]) if snap["nifty500_dma200"].notna().any() else np.nan
         snap["rs6"]=snap["ret_6m"]-nifty6
