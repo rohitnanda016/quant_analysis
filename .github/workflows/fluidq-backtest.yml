@@ -59,6 +59,12 @@ jobs:
             --membership data/input/nifty500_membership.csv \
             --events data/input/verified_corporate_events.csv \
             --outdir results/backtest/robustness
+      - name: Run sub-period and regime analysis
+        run: |
+          python scripts/run_fluidq_subperiods.py \
+            --portfolio results/backtest/portfolio_daily.csv \
+            --signals results/backtest/rebalance_signals.csv \
+            --outdir results/backtest/subperiods
       - name: Upload backtest results
         uses: actions/upload-artifact@v4
         with:
