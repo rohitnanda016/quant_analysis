@@ -1,4 +1,5 @@
 name: FLUID-Q Robustness
+# Auto-trigger robustness matrix on engine updates
 
 on:
   push:
