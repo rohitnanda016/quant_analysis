@@ -32,29 +32,35 @@ def main():
     ap.add_argument("--outdir",required=True)
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 
-    p=pd.read_csv(a.portfolio,parse_dates=["date"]).sort_values("date")
+    p=pd.read_csv(a.portfolio,parse_dates=["date","signal_date"]).sort_values("date")
     s=pd.read_csv(a.signals,parse_dates=["date"]).sort_values("date")
     start=p.date.min().strftime("%d-%b-%Y"); end=p.date.max().strftime("%d-%b-%Y")
     tri=fetch_tri(start,end)
     if tri.empty: raise ValueError("Nifty 500 TRI returned no rows")
     tri.columns=[str(x).strip().lower().replace(" ","_") for x in tri.columns]
     date_col=next(c for c in tri.columns if "date" in c)
-    val_col=next(c for c in tri.columns if c in ("index_value","close","value","index_close") or "index" in c and "value" in c)
+    val_col=next(c for c in tri.columns if c in ("index_value","close","value","index_close") or ("index" in c and "value" in c))
     tri["date"]=pd.to_datetime(tri[date_col],dayfirst=True,errors="coerce")
     tri["value"]=pd.to_numeric(tri[val_col],errors="coerce")
     tri=tri.dropna(subset=["date","value"]).sort_values("date").drop_duplicates("date")
     tri["ret"]=tri.value.pct_change()
 
-    m=p[["date","ret"]].merge(tri[["date","ret"]],on="date",how="inner",suffixes=("_fluidq","_nifty500tri"))
+    m=p[["date","ret","signal_date"]].merge(tri[["date","ret"]],on="date",how="inner",suffixes=("_fluidq","_nifty500tri"))
     if len(m)<1000: raise ValueError(f"Too few benchmark overlap rows: {len(m)}")
     base=stats(m.ret_fluidq); bench=stats(m.ret_nifty500tri)
 
-    sig=s[["date","exposure"]].copy()
-    m=m.merge(sig,on="date",how="left")
-    m["exposure"]=m.exposure.ffill().fillna(1.0)
-    # Regime-matched passive benchmark: same exposure schedule, no stock-selection alpha.
+    sig=s[["date","exposure"]].copy().rename(columns={"date":"signal_date"})
+    m=m.merge(sig,on="signal_date",how="left")
+    missing=int(m.exposure.isna().sum())
+    if missing:
+        raise ValueError(f"Missing regime exposure for {missing} portfolio rows")
+
+    # Apply the exact regime exposure associated with the signal that generated each execution-day return.
     m["matched_bench_ret"]=m.ret_nifty500tri*m.exposure
     matched=stats(m.matched_bench_ret)
+
+    # A daily active-return series is informative, but the primary comparison is the
+    # full and regime-matched benchmark CAGR calculated above.
     active=(1+m.ret_fluidq)/(1+m.ret_nifty500tri)-1
     active_stats=stats(active)
 
@@ -67,4 +73,5 @@ def main():
     (out/"benchmark_comparison.json").write_text(json.dumps(outd,indent=2))
     m.to_csv(out/"benchmark_daily_comparison.csv",index=False)
     print(json.dumps(outd,indent=2))
+
 if __name__=="__main__": main()
