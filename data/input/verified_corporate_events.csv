@@ -1,0 +1,20 @@
+symbol,event_date,event_type,treatment,source,confidence,notes
+JETAIRWAYS,2019-06-20,GENUINE_MARKET_MOVE,retain_raw,India Today / Moneycontrol,high,No split or bonus adjustment; retain as a genuine market move.
+ADANIENT,2015-06-03,DEMERGER_OR_SCHEME,corporate_event,NSE corporate-action record,high,Scheme of Arrangement; do not manufacture a split factor.
+HEG,2024-10-18,SPLIT,back_adjust_5x,HEG split evidence / NSE-BSE records,high,Face value Rs10 to Rs2; five shares for one.
+SINTEX,2017-05-25,DEMERGER_OR_SCHEME,corporate_event,BSE/NSE corporate-action record,high,Demerger/scheme event; treat as security transition rather than split.
+CROMPGREAV,2016-03-15,DEMERGER_OR_SCHEME,corporate_event,BSE/SGSSL exchange record,high,Consumer electricals demerger; do not manufacture a split factor.
+ABFRL,2025-05-22,DEMERGER_OR_SCHEME,corporate_event,NSE corporate-action record,high,Demerger of Madura Fashion and Lifestyle business.
+ARVIND,2018-11-28,DEMERGER_OR_SCHEME,corporate_event,NSE corporate-action record,medium,Exchange-recorded demerger; security transition rather than split.
+VEDL,2026-04-30,DEMERGER_OR_SCHEME,corporate_event,NSE/Vedanta filing,high,Scheme of Arrangement demerger.
+YESBANK,2020-03-17,GENUINE_MARKET_MOVE,retain_raw,Business Standard,high,Large rebound after ratings-related news; no split/bonus factor.
+ABIRLANUVO,2016-01-20,DEMERGER_OR_SCHEME,corporate_event,NSE corporate-action record,high,Scheme of Arrangement; do not manufacture a split factor.
+IDFC,2015-10-01,DEMERGER_OR_SCHEME,corporate_event,NSE corporate-action record,high,Demerger into IDFC Bank; security transition rather than split.
+TATACHEM,2020-03-04,DEMERGER_OR_SCHEME,corporate_event,NSE corporate-action record,high,Demerger; do not manufacture a split factor.
+RCOM,2018-05-17,GENUINE_MARKET_MOVE,retain_raw,Business Standard / IBBI,high,Large rally amid Ericsson settlement and insolvency developments.
+YESBANK,2020-03-06,GENUINE_MARKET_MOVE,retain_raw,Mint / Business Standard,high,Large fall following RBI moratorium and reconstruction scheme.
+CENTURYTEX,2019-10-11,DEMERGER_OR_SCHEME,corporate_event,Business Standard / UltraTech,high,Cement business demerger; security transition rather than split.
+AMTEKAUTO,2015-09-11,GENUINE_MARKET_MOVE,retain_raw,Business Standard,high,Large market move; no split/bonus adjustment.
+NBVENTURES,2016-09-01,BONUS,back_adjust_2x,Moneycontrol / Nava annual report,high,Nava Bharat Ventures 1:1 bonus; ex-bonus 1-Sep-2016.
+AMIORG,2025-04-25,SPLIT,back_adjust_2x,NSE/BSE records / Mint,high,Face value Rs10 to Rs5; two shares for one.
+ESSELPACK,2018-06-20,BONUS,back_adjust_2x,EPL filing / ICICI Securities record,high,1:1 bonus; ex-date 20-Jun-2018.
