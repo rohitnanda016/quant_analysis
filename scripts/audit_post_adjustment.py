@@ -91,9 +91,12 @@ by_status = merged.groupby("status", dropna=False).agg(
 merged[merged["close_adj"].isna()].sort_values(["date", "symbol"]).to_csv(
     out / "missing_adjusted_rows.csv", index=False
 )
-merged[(merged["abs_adjusted_return"] > 0.50) & merged["continuity_relevant"]].sort_values(
+continuity = merged[(merged["abs_adjusted_return"] > 0.50) & merged["continuity_relevant"]].sort_values(
     ["abs_adjusted_return", "date"], ascending=[False, True]
-).to_csv(out / "continuity_relevant_extremes_gt_50pct.csv", index=False)
+)
+continuity.to_csv(out / "continuity_relevant_extremes_gt_50pct.csv", index=False)
+print("\nCONTINUITY-RELEVANT >50% EVENTS")
+print(continuity.to_string(index=False))
 
 merged.sort_values(["abs_adjusted_return", "date"], ascending=[False, True]).to_csv(
     out / "post_adjustment_extreme_events.csv", index=False
