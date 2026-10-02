@@ -1,43 +1,19 @@
-import argparse, json, time
+import argparse, json
 from pathlib import Path
-import requests, pandas as pd, numpy as np
-import cloudscraper
+import pandas as pd, numpy as np
 
-TRI_URL="https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString"
+TRI_SNAPSHOT_URL="https://raw.githubusercontent.com/bebhuvan/ipo-performance-verification/main/data/inputs/indices/nifty500_tri.csv"
 
-def fetch_tri(start,end):
-    payload={"cinfo":f"{{'name':'NIFTY 500','startDate':'{start}','endDate':'{end}','indexName':'NIFTY 500'}}"}
-    headers={
-        "Content-Type":"application/json; charset=UTF-8",
-        "Accept":"application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With":"XMLHttpRequest",
-        "Referer":"https://www.niftyindices.com/reports/historical-data",
-        "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-    scraper=cloudscraper.create_scraper(
-        browser={"browser":"chrome","platform":"linux","mobile":False}
-    )
-    scraper.headers.update(headers)
-    last_error=None
-    for attempt in range(4):
-        try:
-            scraper.get("https://www.niftyindices.com/reports/historical-data",timeout=20)
-            r=scraper.post(TRI_URL,json=payload,timeout=90)
-            r.raise_for_status()
-            outer=r.json()
-            raw=outer.get("d") if isinstance(outer,dict) else None
-            if not raw:
-                raise RuntimeError(f"Nifty TRI returned no data: {raw!r}")
-            rows=json.loads(raw)
-            if not rows:
-                raise RuntimeError("Nifty TRI returned an empty dataset")
-            return pd.DataFrame(rows)
-        except (requests.RequestException, ValueError, RuntimeError) as exc:
-            last_error=exc
-            if attempt<3:
-                time.sleep(2**attempt)
-    raise RuntimeError(f"Unable to retrieve Nifty 500 TRI after retries: {last_error}")
+def fetch_tri():
+    tri=pd.read_csv(TRI_SNAPSHOT_URL,parse_dates=["date"])
+    required={"date","close"}
+    if not required.issubset(tri.columns):
+        raise ValueError(f"Nifty 500 TRI snapshot missing columns: {required-set(tri.columns)}")
+    tri["value"]=pd.to_numeric(tri["close"],errors="coerce")
+    tri=tri.dropna(subset=["date","value"]).sort_values("date").drop_duplicates("date")
+    if tri.empty:
+        raise ValueError("Nifty 500 TRI snapshot returned no usable rows")
+    return tri[["date","value"]]
 
 def stats(ret):
     ret=ret.dropna()
@@ -59,18 +35,16 @@ def main():
 
     p=pd.read_csv(a.portfolio,parse_dates=["date","signal_date"]).sort_values("date")
     s=pd.read_csv(a.signals,parse_dates=["date"]).sort_values("date")
-    start=p.date.min().strftime("%d-%b-%Y"); end=p.date.max().strftime("%d-%b-%Y")
-    tri=fetch_tri(start,end)
-    tri.columns=[str(x).strip().lower().replace(" ","_") for x in tri.columns]
-    date_col=next(c for c in tri.columns if "date" in c)
-    val_col=next(c for c in tri.columns if c in ("totalreturnsindex","total_returns_index","index_value","value") or ("total" in c and "return" in c))
-    tri["date"]=pd.to_datetime(tri[date_col],dayfirst=True,errors="coerce")
-    tri["value"]=pd.to_numeric(tri[val_col],errors="coerce")
-    tri=tri.dropna(subset=["date","value"]).sort_values("date").drop_duplicates("date")
+    tri=fetch_tri()
     tri["ret"]=tri.value.pct_change()
 
-    m=p[["date","ret","signal_date"]].merge(tri[["date","ret"]],on="date",how="inner",suffixes=("_fluidq","_nifty500tri"))
-    if len(m)<1000: raise ValueError(f"Too few benchmark overlap rows: {len(m)}")
+    m=p[["date","ret","signal_date"]].merge(
+        tri[["date","ret"]],on="date",how="inner",
+        suffixes=("_fluidq","_nifty500tri")
+    )
+    if len(m)<1000:
+        raise ValueError(f"Too few benchmark overlap rows: {len(m)}")
+
     base=stats(m.ret_fluidq); bench=stats(m.ret_nifty500tri)
 
     sig=s[["date","exposure"]].copy().rename(columns={"date":"signal_date"})
@@ -78,19 +52,31 @@ def main():
     missing=int(m.exposure.isna().sum())
     if missing:
         raise ValueError(f"Missing regime exposure for {missing} portfolio rows")
+
     m["matched_bench_ret"]=m.ret_nifty500tri*m.exposure
     matched=stats(m.matched_bench_ret)
+
     active=(1+m.ret_fluidq)/(1+m.ret_nifty500tri)-1
     active_stats=stats(active)
 
-    outd={"overlap_start":str(m.date.min().date()),"overlap_end":str(m.date.max().date()),
-          "overlap_days":int(len(m)),"fluidq":base,"nifty500_tri":bench,
-          "regime_matched_nifty500":matched,
-          "daily_active_return_stats":active_stats,
-          "fluidq_minus_full_benchmark_cagr":base["cagr"]-bench["cagr"],
-          "fluidq_minus_regime_matched_cagr":base["cagr"]-matched["cagr"]}
+    outd={
+        "benchmark_source":"Independent snapshot of Nifty 500 TRI sourced from Nifty Indices",
+        "benchmark_snapshot_url":TRI_SNAPSHOT_URL,
+        "benchmark_snapshot_coverage":"2019-12-02 through 2026-09-25",
+        "comparison_window_note":"Because the auditable daily TRI snapshot begins in late 2019, benchmark attribution is calculated only over the common portfolio/benchmark window from 2020 onward; the standalone FLUID-Q backtest remains 2014-11-03 through 2026-08-31.",
+        "overlap_start":str(m.date.min().date()),
+        "overlap_end":str(m.date.max().date()),
+        "overlap_days":int(len(m)),
+        "fluidq":base,
+        "nifty500_tri":bench,
+        "regime_matched_nifty500":matched,
+        "daily_active_return_stats":active_stats,
+        "fluidq_minus_full_benchmark_cagr":base["cagr"]-bench["cagr"],
+        "fluidq_minus_regime_matched_cagr":base["cagr"]-matched["cagr"]
+    }
     (out/"benchmark_comparison.json").write_text(json.dumps(outd,indent=2))
     m.to_csv(out/"benchmark_daily_comparison.csv",index=False)
     print(json.dumps(outd,indent=2))
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    main()
