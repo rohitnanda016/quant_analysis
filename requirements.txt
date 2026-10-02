@@ -2,3 +2,4 @@ pandas>=2.0
 requests>=2.31
 python-dateutil>=2.8
 jugaad-data==0.35.5
+cloudscraper>=1.2.71
