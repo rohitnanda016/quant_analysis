@@ -42,11 +42,18 @@ def find_col(df, candidates):
 def load_membership(path):
     m = pd.read_csv(path)
     sym = find_col(m, ["symbol", "security", "security_symbol", "ticker"])
-    start = find_col(m, ["review_date", "effective_date", "start_date", "date"])
-    end = find_col(m, ["end_date"])
-    if not sym or not start or not end:
-        raise ValueError("PIT membership must contain symbol, effective_date and end_date")
-    m = m.rename(columns={sym: "symbol", start: "effective_date", end: "end_date"})
+    # The project PIT membership uses half-open valid_from/valid_to intervals.
+    # Accept that canonical schema directly, while retaining compatibility with
+    # the older effective_date/end_date naming used by early experiment files.
+    start = find_col(m, ["valid_from", "review_date", "effective_date", "start_date", "date"])
+    end = find_col(m, ["valid_to", "end_date"])
+    if not sym or not start:
+        raise ValueError("PIT membership must contain symbol and a start/valid_from date")
+    m = m.rename(columns={sym: "symbol", start: "effective_date"})
+    if end:
+        m = m.rename(columns={end: "end_date"})
+    else:
+        m["end_date"] = pd.NaT
     m["symbol"] = m["symbol"].astype(str).str.upper().str.strip()
     m["effective_date"] = pd.to_datetime(m["effective_date"], errors="coerce")
     m["end_date"] = pd.to_datetime(m["end_date"], errors="coerce")
