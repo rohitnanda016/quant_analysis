@@ -148,6 +148,13 @@ def main():
     turnc = find_col(df, ["turnover_₹", "turnover", "turnover_rs"])
     if not all([datec, symc, closec]):
         raise ValueError("Required price columns missing")
+    # Avoid duplicate column labels when the adjusted price file contains both
+    # canonical_symbol and its original symbol. Select the canonical identity first,
+    # then rebuild a clean analysis frame.
+    keep = [datec, symc, closec]
+    if turnc:
+        keep.append(turnc)
+    df = df.loc[:, keep].copy()
     ren = {datec: "date", symc: "symbol", closec: "close"}
     if turnc:
         ren[turnc] = "turnover"
