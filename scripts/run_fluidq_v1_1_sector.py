@@ -235,7 +235,7 @@ def main():
 
         chosen = []
         sector_counts = {}
-        max_per_sector = max(1, int(np.floor(a.top_n * .25)))
+        max_per_sector = max(1, min(3, int(np.floor(a.top_n * .25))))
 
         def can_add(sym):
             row = snap.loc[snap.symbol.eq(sym), "sector"]
