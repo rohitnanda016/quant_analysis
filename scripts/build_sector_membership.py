@@ -152,14 +152,18 @@ def main() -> None:
     n.columns = [str(c).strip().lower().replace(" ", "_") for c in n.columns]
     if "symbol" not in n.columns:
         raise ValueError("Nifty 500 membership must contain symbol")
-    if "effective_date" not in n.columns:
-        raise ValueError("Nifty 500 membership must contain effective_date")
+    # Project PIT membership is already expressed as half-open valid_from/valid_to
+    # intervals. Accept that canonical schema directly; older effective_date/end_date
+    # files are also supported for compatibility.
     n["symbol"] = n["symbol"].astype(str).str.upper().str.strip()
-    n["valid_from"] = pd.to_datetime(n["effective_date"], errors="coerce")
-    if "end_date" in n.columns:
+    if "valid_from" in n.columns:
+        n["valid_from"] = pd.to_datetime(n["valid_from"], errors="coerce")
+        n["valid_to"] = pd.to_datetime(n["valid_to"], errors="coerce") if "valid_to" in n.columns else pd.NaT
+    elif "effective_date" in n.columns and "end_date" in n.columns:
+        n["valid_from"] = pd.to_datetime(n["effective_date"], errors="coerce")
         n["valid_to"] = pd.to_datetime(n["end_date"], errors="coerce")
     else:
-        raise ValueError("Nifty 500 membership must contain end_date")
+        raise ValueError("Nifty 500 membership must contain valid_from/valid_to (or effective_date/end_date)")
     n = n.dropna(subset=["symbol", "valid_from"])
 
     # Restrict the source to the backtest's PIT Nifty 500 universe.
