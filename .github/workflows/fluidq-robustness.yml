@@ -13,7 +13,7 @@ on:
       integrity_run_id:
         description: "Price-integrity workflow run"
         required: true
-        default: "36965057855"
+        default: "37038236847"
 
 permissions:
   contents: read
@@ -49,9 +49,9 @@ jobs:
       - name: Download price-integrity artifact
         uses: actions/download-artifact@v5
         with:
-          name: fluidq-price-integrity-${{inputs.integrity_run_id || '36965057855'}}
+          name: fluidq-price-integrity-${{inputs.integrity_run_id || '37038236847'}}
           path: integrity_artifact
-          run-id: ${{inputs.integrity_run_id || '36965057855'}}
+          run-id: ${{inputs.integrity_run_id || '37038236847'}}
           github-token: ${{secrets.GITHUB_TOKEN}}
       - name: Restore backtest inputs
         run: |
