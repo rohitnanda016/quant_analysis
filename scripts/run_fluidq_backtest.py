@@ -83,6 +83,8 @@ def main():
     ap.add_argument("--top-n",type=int,default=15)
     ap.add_argument("--transaction-cost",type=float,default=0.003)
     ap.add_argument("--rebalance-frequency",choices=["monthly","quarterly"],default="monthly")
+    ap.add_argument("--sector-membership",default=None)
+    ap.add_argument("--sector-constrained",action="store_true")
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 
     df=pd.read_csv(a.prices,low_memory=False)
@@ -116,6 +118,15 @@ def main():
     df=df.merge(nifty[["date","nifty500_close","nifty500_ret_6m","nifty500_dma200"]],on="date",how="left")
 
     members=load_membership(a.membership)
+    sector_members=None
+    if a.sector_constrained:
+        if not a.sector_membership:
+            raise ValueError("--sector-membership is required with --sector-constrained")
+        sector_members=pd.read_csv(a.sector_membership,parse_dates=["valid_from","valid_to"])
+        sector_members["symbol"]=sector_members["symbol"].astype(str).str.upper().str.strip()
+        sector_members["sector"]=sector_members["sector"].astype(str).str.strip()
+        sector_members["valid_from"]=pd.to_datetime(sector_members["valid_from"],errors="coerce")
+        sector_members["valid_to"]=pd.to_datetime(sector_members["valid_to"],errors="coerce")
     events=pd.read_csv(a.events); events["event_date"]=pd.to_datetime(events["event_date"],errors="coerce")
     corporate=set(events.loc[events.treatment=="corporate_event","symbol"].astype(str).str.upper())
     period_key=df["date"].dt.to_period("M") if a.rebalance_frequency=="monthly" else df["date"].dt.to_period("Q")
@@ -140,9 +151,20 @@ def main():
         nifty6=float(snap["nifty500_ret_6m"].iloc[0]) if snap["nifty500_ret_6m"].notna().any() else np.nan
         nifty_dma=float(snap["nifty500_dma200"].iloc[0]) if snap["nifty500_dma200"].notna().any() else np.nan
         snap["rs6"]=snap["ret_6m"]-nifty6
+        if sector_members is not None:
+            sm=sector_members[(sector_members.valid_from<=rd)&((sector_members.valid_to.isna())|(sector_members.valid_to>=rd))]
+            sm=sm[["symbol","sector"]].drop_duplicates("symbol")
+            snap=snap.merge(sm,on="symbol",how="left")
+            sector_mom=snap.dropna(subset=["sector"]).groupby("sector")["ret_6m"].mean().rename("sector_momentum")
+            snap=snap.merge(sector_mom,on="sector",how="left")
+            snap["sector_momentum_pct"]=snap["sector_momentum"].rank(pct=True)*100
         cols=["ret_6m","ret_12m_ex1m","rs6","trend","ram"]
         for c in cols: snap[c+"_pct"]=snap[c].rank(pct=True)*100
-        snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+snap["rs6_pct"]*.20+snap["trend_pct"]*.20+snap["ram_pct"]*.15)/.90
+        if sector_members is not None:
+            snap["sector_momentum_pct"]=snap["sector_momentum_pct"].fillna(50.0)
+            snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+snap["rs6_pct"]*.20+snap["trend_pct"]*.20+snap["ram_pct"]*.15+snap["sector_momentum_pct"]*.10)
+        else:
+            snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+snap["rs6_pct"]*.20+snap["trend_pct"]*.20+snap["ram_pct"]*.15)/.90
         eligible=snap[(snap["close"]>snap["dma200"])&(snap["ret_6m"]>0)&(snap["rs6"]>0)]
         if "adv60" in snap: eligible=eligible[eligible["adv60"]>=1e8]
         eligible=eligible.sort_values(["score","ret_6m"],ascending=False); eligible=eligible.assign(rank=eligible["score"].rank(method="first",ascending=False))
@@ -150,9 +172,26 @@ def main():
         keep=[s for s in holdings if s in eligible_set and s in set(eligible.loc[eligible.score>=65,"symbol"]) and s in set(eligible.loc[eligible["rank"]<=30,"symbol"])]
         candidates=eligible[(eligible.score>=75)&(eligible["rank"]<=30)]
         chosen=[]
-        for s in keep: chosen.append(s)
+        sector_counts={}
+        def can_add(sym):
+            if sector_members is None:
+                return True
+            row=snap.loc[snap.symbol.eq(sym),"sector"]
+            sec=row.iloc[0] if not row.empty else np.nan
+            if pd.isna(sec):
+                return True
+            return sector_counts.get(sec,0) < max(1,int(np.floor(a.top_n*0.25)))
+        def add(sym):
+            chosen.append(sym)
+            if sector_members is not None:
+                row=snap.loc[snap.symbol.eq(sym),"sector"]
+                if not row.empty and pd.notna(row.iloc[0]):
+                    sec=row.iloc[0]
+                    sector_counts[sec]=sector_counts.get(sec,0)+1
+        for s in keep:
+            if len(chosen)<a.top_n and can_add(s): add(s)
         for s in candidates.symbol:
-            if s not in chosen and len(chosen)<a.top_n: chosen.append(s)
+            if s not in chosen and len(chosen)<a.top_n and can_add(s): add(s)
         chosen=chosen[:a.top_n]
         breadth=float((snap["close"]>snap["dma200"]).mean())
         healthy=int(breadth>=.60)+int(nifty6>0)+int(nifty_dma>0 and float(snap["nifty500_close"].iloc[0])>nifty_dma)
@@ -186,7 +225,7 @@ def main():
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"]); dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","note":"Sector momentum/sector caps are not applied because the supplied point-in-time membership artifact contains no verified historical sector field; weights are therefore renormalized over the five available cross-sectional factors."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
