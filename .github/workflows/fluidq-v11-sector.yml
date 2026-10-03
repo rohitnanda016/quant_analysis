@@ -1,6 +1,8 @@
 name: FLUID-Q V1.1 Sector Constrained
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       integrity_run_id:
