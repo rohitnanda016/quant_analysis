@@ -1,6 +1,8 @@
 name: FLUID-Q V1.1 Sector Experiment
 
 on:
+  push:
+    branches: [v1.1-sector-constraints]
   workflow_dispatch:
     inputs:
       integrity_run_id:
