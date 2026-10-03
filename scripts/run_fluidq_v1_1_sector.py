@@ -280,11 +280,22 @@ def main():
         turnover = (len(set(chosen) ^ set(holdings)) / 2) / max(len(chosen), 1) if chosen else (1.0 if holdings else 0.0)
 
         classified = snap["sector"].notna()
+        chosen_rows = snap[snap["symbol"].isin(chosen)].copy()
+        chosen_classified = chosen_rows["sector"].notna()
+        chosen_sector_counts = chosen_rows.loc[chosen_classified, "sector"].value_counts().to_dict()
+        max_classified_sector_weight = (
+            max(chosen_sector_counts.values(), default=0) / len(chosen)
+            if chosen else 0.0
+        )
         snapshots.append({
             "date": rd,
             "n_eligible": len(eligible),
             "n_sector_classified": int(classified.sum()),
             "sector_coverage": float(classified.mean()) if len(snap) else 0.0,
+            "n_holdings": len(chosen),
+            "n_holdings_sector_classified": int(chosen_classified.sum()),
+            "holdings_sector_coverage": float(chosen_classified.mean()) if chosen else 0.0,
+            "max_classified_sector_weight": float(max_classified_sector_weight),
             "holdings": ",".join(chosen),
             "exposure": exposure,
             "regime_healthy": healthy,
@@ -293,6 +304,7 @@ def main():
             "nifty500_above_dma200": bool(nifty_dma > 0 and float(snap["nifty500_close"].iloc[0]) > nifty_dma),
             "turnover": turnover,
             "sector_counts": json.dumps(sector_counts, sort_keys=True),
+            "chosen_sector_counts": json.dumps(chosen_sector_counts, sort_keys=True),
         })
         holdings = set(chosen)
 
