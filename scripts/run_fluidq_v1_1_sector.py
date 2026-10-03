@@ -202,7 +202,7 @@ def main():
 
     for rd in reb_dates:
         snap = df[df.date.eq(rd)].copy()
-        mm = members[(members.effective_date <= rd) & (members.end_date.isna() | (members.end_date > rd))]
+        mm = members[(members.effective_date <= rd) & (members.end_date.isna() | (members.end_date >= rd))]
         active = mm[["symbol"]].drop_duplicates()
         snap = snap.merge(active, on="symbol", how="inner")
 
