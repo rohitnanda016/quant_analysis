@@ -150,7 +150,7 @@ def main():
 
     df = pd.read_csv(a.prices, low_memory=False)
     datec = find_col(df, ["date"])
-    symc = find_col(df, ["canonical_symbol", "symbol"])
+    symc = find_col(df, ["symbol", "canonical_symbol"])
     closec = find_col(df, ["close"])
     turnc = find_col(df, ["turnover_₹", "turnover", "turnover_rs"])
     if not all([datec, symc, closec]):
