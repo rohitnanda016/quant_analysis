@@ -35,7 +35,6 @@ jobs:
           mkdir -p data/processed/adjusted data/input results/v1_1_sector
           cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_corporate_events.csv data/input/verified_corporate_events.csv
       - name: Fetch pinned PIT sector history
         run: |
           curl -L --fail --retry 4             https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/0e9f58c4d457faf0e7ad3db4f4c1449e697e23e0/index_history/data/index_membership_history.csv             -o data/input/index_membership_history.csv
