@@ -25,6 +25,8 @@ jobs:
           - top20_baseline
           - top20_no_sector_momentum
           - top20_no_sector_constraints
+          - top20_strict_classification
+          - top20_strict_no_sector_momentum
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -64,6 +66,8 @@ jobs:
             top20_baseline) EXTRA="--sector-momentum-weight 0.10" ;;
             top20_no_sector_momentum) EXTRA="--sector-momentum-weight 0.00" ;;
             top20_no_sector_constraints) EXTRA="--sector-momentum-weight 0.10 --disable-sector-constraints" ;;
+            top20_strict_classification) EXTRA="--sector-momentum-weight 0.10 --require-sector-classification" ;;
+            top20_strict_no_sector_momentum) EXTRA="--sector-momentum-weight 0.00 --require-sector-classification" ;;
           esac
           python scripts/run_fluidq_v1_1_sector.py \
             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
