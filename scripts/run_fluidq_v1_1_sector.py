@@ -146,6 +146,7 @@ def main():
     ap.add_argument("--sector-start-date", default="2017-01-01")
     ap.add_argument("--sector-momentum-weight", type=float, default=0.10)
     ap.add_argument("--disable-sector-constraints", action="store_true")
+    ap.add_argument("--require-sector-classification", action="store_true", help="Exclude stocks without a PIT sector classification when sector constraints are enabled")
     a = ap.parse_args()
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=True)
@@ -250,7 +251,10 @@ def main():
         score65 = set(eligible.loc[eligible.score >= 65, "symbol"])
         rank30 = set(eligible.loc[eligible["rank"] <= 30, "symbol"])
         keep = [s for s in holdings if s in eligible_set and s in score65 and s in rank30]
-        candidates = eligible[(eligible.score >= 75) & (eligible["rank"] <= 30)]
+        candidates = eligible[(eligible.score >= 75) & (eligible["rank"] <= 30)].copy()
+        if a.require_sector_classification and not a.disable_sector_constraints:
+            keep = [s for s in keep if pd.notna(snap.loc[snap.symbol.eq(s), "sector"]).any()]
+            candidates = candidates[candidates["sector"].notna()]
 
         chosen = []
         sector_counts = {}
@@ -371,17 +375,18 @@ def main():
         "top_n": a.top_n,
         "transaction_cost": a.transaction_cost,
         "rebalance_frequency": a.rebalance_frequency,
-        "sector_constrained": True,
-        "sector_max_holdings": max_per_sector,
-        "sector_max_weight": .25,
-        "sector_momentum_weight": .10,
+        "sector_constrained": not a.disable_sector_constraints,
+        "sector_max_holdings": max_per_sector if not a.disable_sector_constraints else None,
+        "sector_max_weight": .25 if not a.disable_sector_constraints else None,
+        "sector_momentum_weight": a.sector_momentum_weight,
+        "require_sector_classification": bool(a.require_sector_classification and not a.disable_sector_constraints),
         "sector_start_date": a.sector_start_date,
         "relative_strength_definition": "stock 6M return minus Nifty 500 6M price return",
         "sector_momentum_definition": "corresponding NSE sector-index 6M price return",
         "sector_membership_definition": "PIT intersection of upstream NSE sector-index intervals with project Nifty 500 intervals; half-open [valid_from, valid_to)",
         "sector_membership_source": "aditya-jha/nse-historical-membership",
         "sector_membership_source_commit": "0e9f58c4d457faf0e7ad3db4f4c1449e697e23e0",
-        "note": "V1.1 is a separate experiment. It starts in 2017 because the upstream sector history documents materially stronger coverage from 2017 onward. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps.",
+        "note": "V1.1 is a separate experiment. It starts in 2017 because the upstream sector history documents materially stronger coverage from 2017 onward. In default mode, unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps; strict mode excludes unclassified stocks from sector-constrained selection.",
     }
 
     sig.to_csv(out / "rebalance_signals.csv", index=False)
