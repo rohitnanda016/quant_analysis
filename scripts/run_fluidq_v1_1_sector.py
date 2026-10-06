@@ -225,12 +225,15 @@ def main():
             snap[c + "_pct"] = snap[c].rank(pct=True) * 100
 
         snap["sector_momentum_pct"] = snap["sector_momentum_pct"].fillna(50.0)
+        if not 0 <= a.sector_momentum_weight <= 1:
+            raise ValueError("--sector-momentum-weight must be between 0 and 1")
+        base_scale = (1.0 - a.sector_momentum_weight) / 0.90
         snap["score"] = (
-            snap["ret_6m_pct"] * .20 +
-            snap["ret_12m_ex1m_pct"] * .15 +
-            snap["rs6_pct"] * .20 +
-            snap["trend_pct"] * .20 +
-            snap["ram_pct"] * (0.25 - a.sector_momentum_weight) +
+            snap["ret_6m_pct"] * .20 * base_scale +
+            snap["ret_12m_ex1m_pct"] * .15 * base_scale +
+            snap["rs6_pct"] * .20 * base_scale +
+            snap["trend_pct"] * .20 * base_scale +
+            snap["ram_pct"] * .15 * base_scale +
             snap["sector_momentum_pct"] * a.sector_momentum_weight
         )
 
