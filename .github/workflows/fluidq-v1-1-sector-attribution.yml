@@ -1,0 +1,87 @@
+name: FLUID-Q V1.1 Sector Attribution
+
+on:
+  push:
+    branches: [v1.1-sector-constraints]
+  workflow_dispatch:
+    inputs:
+      integrity_run_id:
+        description: "Completed price-integrity workflow run"
+        required: true
+        default: "37038236847"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - top20_baseline
+          - top20_no_sector_momentum
+          - top20_no_sector_constraints
+          - top20_strict_classification
+          - top20_strict_no_sector_momentum
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-${{ inputs.integrity_run_id || '37038236847' }}
+          path: integrity_artifact
+          run-id: ${{ inputs.integrity_run_id || '37038236847' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore inputs
+        run: |
+          mkdir -p data/processed/adjusted data/input results/v1_1_attribution
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+          cp integrity_artifact/data/input/nifty500_membership.csv data/input/
+      - name: Fetch pinned PIT sector history
+        run: |
+          curl -L --fail --retry 4 \
+            https://raw.githubusercontent.com/aditya-jha/nse-historical-membership/0e9f58c4d457faf0e7ad3db4f4c1449e697e23e0/index_history/data/index_membership_history.csv \
+            -o data/input/index_membership_history.csv
+          python scripts/build_sector_membership.py \
+            --membership data/input/index_membership_history.csv \
+            --nifty500 data/input/nifty500_membership.csv \
+            --out data/input/historical_sector_membership.csv \
+            --coverage-start 2017-01-01 \
+            --coverage-end 2026-08-31
+      - name: Run attribution scenario
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          EXTRA=""
+          case "$SCENARIO" in
+            top20_baseline) EXTRA="--sector-momentum-weight 0.10" ;;
+            top20_no_sector_momentum) EXTRA="--sector-momentum-weight 0.00" ;;
+            top20_no_sector_constraints) EXTRA="--sector-momentum-weight 0.10 --disable-sector-constraints" ;;
+            top20_strict_classification) EXTRA="--sector-momentum-weight 0.10 --require-sector-classification" ;;
+            top20_strict_no_sector_momentum) EXTRA="--sector-momentum-weight 0.00 --require-sector-classification" ;;
+          esac
+          python scripts/run_fluidq_v1_1_sector.py \
+            --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
+            --membership data/input/nifty500_membership.csv \
+            --sector-membership data/input/historical_sector_membership.csv \
+            --events data/input/verified_corporate_events.csv \
+            --outdir results/v1_1_attribution \
+            --top-n 20 \
+            --transaction-cost 0.003 \
+            --rebalance-frequency monthly \
+            $EXTRA
+      - name: Upload scenario result
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-v1-1-attribution-${{ matrix.scenario }}
+          path: results/v1_1_attribution/
+          retention-days: 30
