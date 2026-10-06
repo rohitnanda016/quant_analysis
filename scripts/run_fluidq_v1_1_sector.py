@@ -144,6 +144,8 @@ def main():
     ap.add_argument("--transaction-cost", type=float, default=0.003)
     ap.add_argument("--rebalance-frequency", choices=["monthly", "quarterly"], default="monthly")
     ap.add_argument("--sector-start-date", default="2017-01-01")
+    ap.add_argument("--sector-momentum-weight", type=float, default=0.10)
+    ap.add_argument("--disable-sector-constraints", action="store_true")
     a = ap.parse_args()
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=True)
@@ -228,8 +230,8 @@ def main():
             snap["ret_12m_ex1m_pct"] * .15 +
             snap["rs6_pct"] * .20 +
             snap["trend_pct"] * .20 +
-            snap["ram_pct"] * .15 +
-            snap["sector_momentum_pct"] * .10
+            snap["ram_pct"] * (0.25 - a.sector_momentum_weight) +
+            snap["sector_momentum_pct"] * a.sector_momentum_weight
         )
 
         eligible = snap[
@@ -250,6 +252,8 @@ def main():
         chosen = []
         sector_counts = {}
         max_per_sector = max(1, min(3, int(np.floor(a.top_n * .25))))
+        if a.disable_sector_constraints:
+            max_per_sector = a.top_n
 
         def can_add(sym):
             row = snap.loc[snap.symbol.eq(sym), "sector"]
