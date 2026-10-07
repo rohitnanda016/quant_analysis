@@ -10,6 +10,44 @@ from run_fluidq_backtest import find_col, load_membership
 FACTORS = ["ret_6m", "ret_12m_ex1m", "rs6", "trend", "ram"]
 
 
+def load_diagnostic_membership(path):
+    """Normalize PIT membership to effective_date/end_date for diagnostics.
+
+    build_historical_membership.py emits valid_from/valid_to. Those dates are
+    inclusive in the generated file, so an observation on rd is active when
+    valid_from <= rd <= valid_to. Older membership schemas are also accepted.
+    """
+    m = pd.read_csv(path, low_memory=False)
+    m.columns = [str(c).strip().lower().replace(" ", "_") for c in m.columns]
+
+    if "symbol" not in m.columns:
+        raise ValueError("Membership file must contain symbol")
+
+    if "valid_from" in m.columns:
+        startc = "valid_from"
+    else:
+        startc = next((c for c in ["review_date", "effective_date", "start_date", "date"]
+                       if c in m.columns), None)
+    if not startc:
+        raise ValueError("Membership file has no recognized effective/start date column")
+
+    if "valid_to" in m.columns:
+        endc = "valid_to"
+    else:
+        endc = next((c for c in ["end_date", "expiry_date", "to_date"]
+                      if c in m.columns), None)
+
+    m["effective_date"] = pd.to_datetime(m[startc], errors="coerce")
+    if endc:
+        m["end_date"] = pd.to_datetime(m[endc], errors="coerce")
+    else:
+        m["end_date"] = pd.NaT
+
+    m["symbol"] = m["symbol"].astype(str).str.upper().str.strip()
+    m = m.dropna(subset=["effective_date"])
+    return m
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
@@ -49,36 +87,52 @@ def main():
     period_key = df["date"].dt.to_period("M")
     reb_dates = df.groupby(period_key)["date"].max().tolist()
 
-    members = load_membership(args.membership)
+    members = load_diagnostic_membership(args.membership)
+    if members.empty:
+        raise ValueError("Membership file produced zero valid effective dates")
 
     corr_rows = []
     ic_rows = []
     overlap_rows = []
     rank_identity_rows = []
 
+    counts = {
+        "rebalance_dates": int(len(reb_dates)),
+        "rebalance_snapshots_seen": 0,
+        "snapshots_with_active_members": 0,
+        "snapshots_with_price_members": 0,
+        "usable_snapshots": 0,
+        "usable_factor_rows": 0,
+    }
+
     rebalance_df = df[df["date"].isin(reb_dates)].copy()
     for rd, snap in rebalance_df.groupby("date", sort=True):
+        counts["rebalance_snapshots_seen"] += 1
         snap = snap.copy()
         if snap.empty:
             continue
 
-        mm = members[members.effective_date <= rd].copy()
+        mm = members[(members.effective_date <= rd) &
+                     (members.end_date.isna() | (members.end_date >= rd))].copy()
         if mm.empty:
             continue
-        if "end_date" in mm.columns:
-            mm = mm[(mm.end_date.isna()) | (mm.end_date >= rd)]
-            active = mm[["symbol"]].drop_duplicates()
-        else:
-            latest = mm.effective_date.max()
-            active = mm.loc[mm.effective_date.eq(latest), ["symbol"]].drop_duplicates()
+        counts["snapshots_with_active_members"] += 1
 
+        active = mm[["symbol"]].drop_duplicates()
         snap = snap.merge(active, on="symbol", how="inner")
-        # RS6 differs from 6M return only by a date-level constant, so its cross-sectional rank is identical.
+        if snap.empty:
+            continue
+        counts["snapshots_with_price_members"] += 1
+
+        # RS6 differs from 6M return only by a date-level constant, so its
+        # cross-sectional rank is identical.
         snap["rs6"] = snap["ret_6m"]
 
         usable = snap.dropna(subset=FACTORS)
         if len(usable) < 30:
             continue
+        counts["usable_snapshots"] += 1
+        counts["usable_factor_rows"] += int(len(usable))
 
         ranks = usable[FACTORS].rank(pct=True)
         ranks["date"] = rd
@@ -131,12 +185,25 @@ def main():
     overlap_df = pd.DataFrame(overlap_rows)
     identity_df = pd.DataFrame(rank_identity_rows)
 
+    if counts["usable_snapshots"] == 0:
+        raise RuntimeError(
+            "No usable PIT membership snapshots were produced; "
+            f"diagnostic_counts={counts}"
+        )
+
     corr_df.to_csv(out / "factor_pairwise_correlations.csv", index=False)
     ic_df.to_csv(out / "factor_forward_ic.csv", index=False)
     overlap_df.to_csv(out / "factor_top30_overlap.csv", index=False)
     identity_df.to_csv(out / "six_month_vs_rs6_identity.csv", index=False)
 
-    summary = {"rs6_rank_identity_note": "RS6 is represented by ret_6m in this diagnostic because subtracting the common Nifty 500 6M return preserves cross-sectional ranks exactly."}
+    summary = {
+        "diagnostic_counts": counts,
+        "rs6_rank_identity_note": (
+            "RS6 is represented by ret_6m in this diagnostic because "
+            "subtracting the common Nifty 500 6M return preserves "
+            "cross-sectional ranks exactly."
+        ),
+    }
     if not corr_df.empty:
         summary["mean_pairwise_spearman"] = (
             corr_df.groupby(["factor_1", "factor_2"]).spearman.mean()
@@ -151,7 +218,6 @@ def main():
             .to_dict("records")
         )
 
-        # Average monthly correlation matrix -> eigenvalue-based effective rank.
         matrices = []
         for _, grp in corr_df.groupby("date"):
             m = np.eye(len(FACTORS))
