@@ -46,7 +46,7 @@ def main():
     df["ram"] = df["ret_6m"] / df["vol126"].replace(0, np.nan)
     df["forward_21d"] = g["close"].shift(-21).div(df["close"]) - 1
 
-    nifty = load_nifty500_index(df["date"].unique())
+    period_key = df["date"].dt.to_period("M")\n    reb_dates = df.groupby(period_key)["date"].max().tolist()\n    nifty = load_nifty500_index(reb_dates)
     df = df.merge(
         nifty[["date", "nifty500_ret_6m"]],
         on="date",
