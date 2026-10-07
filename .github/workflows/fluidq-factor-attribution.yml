@@ -109,13 +109,6 @@ jobs:
           path: integrity_artifact
           run-id: ${{inputs.integrity_run_id || '37038236847'}}
           github-token: ${{secrets.GITHUB_TOKEN}}
-      - name: Download validated baseline signals
-        uses: actions/download-artifact@v5
-        with:
-          name: fluidq-factor-attribution-baseline
-          path: baseline_artifact
-          run-id: 37559935261
-          github-token: ${{secrets.GITHUB_TOKEN}}
       - name: Restore backtest inputs
         run: |
           mkdir -p data/processed/adjusted data/input results/factor_diagnostics
