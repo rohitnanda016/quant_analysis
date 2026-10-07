@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from run_fluidq_backtest import find_col, load_membership, load_nifty500_index
+from run_fluidq_backtest import find_col, load_membership
 
 
 FACTORS = ["ret_6m", "ret_12m_ex1m", "rs6", "trend", "ram"]
@@ -15,7 +15,6 @@ def main():
     ap.add_argument("--prices", required=True)
     ap.add_argument("--membership", required=True)
     ap.add_argument("--outdir", required=True)
-    ap.add_argument("--nifty-signal", default=None, help="Validated rebalance-signal CSV containing Nifty 500 6M returns")
     args = ap.parse_args()
 
     out = Path(args.outdir)
@@ -49,13 +48,6 @@ def main():
 
     period_key = df["date"].dt.to_period("M")
     reb_dates = df.groupby(period_key)["date"].max().tolist()
-    if args.nifty_signal:
-        signal = pd.read_csv(args.nifty_signal, parse_dates=["date"])
-        signal = signal[["date", "nifty500_ret_6m"]].drop_duplicates("date")
-        df = df.merge(signal, on="date", how="left")
-    else:
-        nifty = load_nifty500_index(df["date"].unique())
-        df = df.merge(nifty[["date", "nifty500_ret_6m"]], on="date", how="left")
 
     members = load_membership(args.membership)
     period_key = df["date"].dt.to_period("M")
@@ -83,7 +75,8 @@ def main():
             active = mm.loc[mm.effective_date.eq(latest), ["symbol"]].drop_duplicates()
 
         snap = snap.merge(active, on="symbol", how="inner")
-        snap["rs6"] = snap["ret_6m"] - snap["nifty500_ret_6m"].iloc[0]
+        # RS6 differs from 6M return only by a date-level constant, so its cross-sectional rank is identical.
+        snap["rs6"] = snap["ret_6m"]
 
         usable = snap.dropna(subset=FACTORS)
         if len(usable) < 30:
@@ -145,7 +138,7 @@ def main():
     overlap_df.to_csv(out / "factor_top30_overlap.csv", index=False)
     identity_df.to_csv(out / "six_month_vs_rs6_identity.csv", index=False)
 
-    summary = {}
+    summary = {"rs6_rank_identity_note": "RS6 is represented by ret_6m in this diagnostic because subtracting the common Nifty 500 6M return preserves cross-sectional ranks exactly."}
     if not corr_df.empty:
         summary["mean_pairwise_spearman"] = (
             corr_df.groupby(["factor_1", "factor_2"]).spearman.mean()
