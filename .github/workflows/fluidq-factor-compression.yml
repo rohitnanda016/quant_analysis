@@ -30,6 +30,8 @@ jobs:
             weights: "0.20,0.15,0.20,0.20,0.15"
           - name: drop_rs6_original_renorm
             weights: "0.25,0.1875,0,0.25,0.1875"
+          - name: compressed_equivalent
+            weights: "0.40,0.15,0,0.20,0.15"
           - name: equal_4factor
             weights: "0.25,0.25,0,0.25,0.25"
           - name: trend_ram_12m_only
