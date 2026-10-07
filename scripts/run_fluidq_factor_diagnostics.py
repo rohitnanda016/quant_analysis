@@ -15,6 +15,7 @@ def main():
     ap.add_argument("--prices", required=True)
     ap.add_argument("--membership", required=True)
     ap.add_argument("--outdir", required=True)
+    ap.add_argument("--nifty-signal", default=None, help="Validated rebalance-signal CSV containing Nifty 500 6M returns")
     args = ap.parse_args()
 
     out = Path(args.outdir)
@@ -48,12 +49,13 @@ def main():
 
     period_key = df["date"].dt.to_period("M")
     reb_dates = df.groupby(period_key)["date"].max().tolist()
-    nifty = load_nifty500_index(df["date"].unique())
-    df = df.merge(
-        nifty[["date", "nifty500_ret_6m"]],
-        on="date",
-        how="left",
-    )
+    if args.nifty_signal:
+        signal = pd.read_csv(args.nifty_signal, parse_dates=["date"])
+        signal = signal[["date", "nifty500_ret_6m"]].drop_duplicates("date")
+        df = df.merge(signal, on="date", how="left")
+    else:
+        nifty = load_nifty500_index(df["date"].unique())
+        df = df.merge(nifty[["date", "nifty500_ret_6m"]], on="date", how="left")
 
     members = load_membership(args.membership)
     period_key = df["date"].dt.to_period("M")
