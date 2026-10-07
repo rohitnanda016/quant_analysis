@@ -85,7 +85,12 @@ def main():
     ap.add_argument("--rebalance-frequency",choices=["monthly","quarterly"],default="monthly")
     ap.add_argument("--sector-membership",default=None)
     ap.add_argument("--sector-constrained",action="store_true")
+    ap.add_argument("--factor-weights",default="0.20,0.15,0.20,0.20,0.15")
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
+    raw_weights=[float(x.strip()) for x in a.factor_weights.split(",")]
+    if len(raw_weights)!=5 or any(x<0 for x in raw_weights) or sum(raw_weights)<=0: raise ValueError("--factor-weights must contain five non-negative values with positive sum")
+    factor_weights=np.array(raw_weights,dtype=float)/sum(raw_weights)
+    w6m,w12,wr6,wtrend,wram=factor_weights
 
     df=pd.read_csv(a.prices,low_memory=False)
     datec=find_col(df,["date"]); symc=find_col(df,["canonical_symbol","symbol"])
@@ -164,7 +169,7 @@ def main():
             snap["sector_momentum_pct"]=snap["sector_momentum_pct"].fillna(50.0)
             snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+snap["rs6_pct"]*.20+snap["trend_pct"]*.20+snap["ram_pct"]*.15+snap["sector_momentum_pct"]*.10)
         else:
-            snap["score"]=(snap["ret_6m_pct"]*.20+snap["ret_12m_ex1m_pct"]*.15+snap["rs6_pct"]*.20+snap["trend_pct"]*.20+snap["ram_pct"]*.15)/.90
+            snap["score"]=(snap["ret_6m_pct"]*w6m+snap["ret_12m_ex1m_pct"]*w12+snap["rs6_pct"]*wr6+snap["trend_pct"]*wtrend+snap["ram_pct"]*wram)
         eligible=snap[(snap["close"]>snap["dma200"])&(snap["ret_6m"]>0)&(snap["rs6"]>0)]
         if "adv60" in snap: eligible=eligible[eligible["adv60"]>=1e8]
         eligible=eligible.sort_values(["score","ret_6m"],ascending=False); eligible=eligible.assign(rank=eligible["score"].rank(method="first",ascending=False))
@@ -225,7 +230,7 @@ def main():
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"]); dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
