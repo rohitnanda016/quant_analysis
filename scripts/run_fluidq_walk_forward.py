@@ -52,7 +52,7 @@ def main():
     a = ap.parse_args()
     root = Path(a.outdir); root.mkdir(parents=True, exist_ok=True)
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=len(CANDIDATES)) as ex:
+    with ThreadPoolExecutor(max_workers=1) as ex:
         futures = [ex.submit(run_candidate, a, name, weights, root) for name, weights in CANDIDATES.items()]
         for fut in as_completed(futures):
             fut.result()
