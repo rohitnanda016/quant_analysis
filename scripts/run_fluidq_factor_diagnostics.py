@@ -48,7 +48,7 @@ def main():
 
     period_key = df["date"].dt.to_period("M")
     reb_dates = df.groupby(period_key)["date"].max().tolist()
-    nifty = load_nifty500_index(reb_dates)
+    nifty = load_nifty500_index(df["date"].unique())
     df = df.merge(
         nifty[["date", "nifty500_ret_6m"]],
         on="date",
