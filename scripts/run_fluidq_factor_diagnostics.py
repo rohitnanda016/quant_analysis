@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
 
 from run_fluidq_backtest import find_col, load_membership, load_nifty500_index
 
