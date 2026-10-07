@@ -50,8 +50,6 @@ def main():
     reb_dates = df.groupby(period_key)["date"].max().tolist()
 
     members = load_membership(args.membership)
-    period_key = df["date"].dt.to_period("M")
-    reb_dates = df.groupby(period_key)["date"].max().tolist()
 
     corr_rows = []
     ic_rows = []
