@@ -154,7 +154,7 @@ def main():
                 ic_rows.append({
                     "date": rd,
                     "factor": f,
-                    "ic_spearman": float(x[f].corr(x.forward_21d, method="spearman")),
+                    "ic_spearman": float(x[f].rank(method="average").corr(x.forward_21d.rank(method="average"))),
                     "n": len(x),
                 })
 
