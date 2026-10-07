@@ -37,7 +37,7 @@ jobs:
           mkdir -p data/processed/adjusted data/input
           cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_corporate_events.csv data/input/
+          cp integrity_artifact/data/input/verified_corporate_events.csv data/input/ 2>/dev/null || cp integrity_artifact/verified_corporate_events.csv data/input/
 
       - name: Run walk-forward selection
         run: |
