@@ -51,8 +51,11 @@ def main():
     ap.add_argument("--test-years", type=int, default=1)
     a = ap.parse_args()
     root = Path(a.outdir); root.mkdir(parents=True, exist_ok=True)
-    for name, weights in CANDIDATES.items():
-        run_candidate(a, name, weights, root)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=len(CANDIDATES)) as ex:
+        futures = [ex.submit(run_candidate, a, name, weights, root) for name, weights in CANDIDATES.items()]
+        for fut in as_completed(futures):
+            fut.result()
 
     series = {}
     for name in CANDIDATES:
