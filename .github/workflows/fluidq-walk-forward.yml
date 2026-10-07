@@ -7,6 +7,7 @@ on:
       - "scripts/run_fluidq_walk_forward.py"
       - "scripts/run_fluidq_backtest.py"
       - ".github/workflows/fluidq-walk-forward.yml"
+      - "data/input/verified_corporate_events.csv"
   workflow_dispatch:
 
 jobs:
@@ -37,7 +38,7 @@ jobs:
           mkdir -p data/processed/adjusted data/input
           cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_corporate_events.csv data/input/ 2>/dev/null || cp integrity_artifact/verified_corporate_events.csv data/input/
+          test -s data/input/verified_corporate_events.csv
 
       - name: Run walk-forward selection
         run: |
