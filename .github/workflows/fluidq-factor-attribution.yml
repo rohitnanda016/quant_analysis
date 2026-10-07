@@ -90,3 +90,39 @@ jobs:
           name: fluidq-factor-attribution-${{matrix.name}}
           path: "results/factor_attribution/${{matrix.name}}/"
           retention-days: 30
+
+      
+  factor_diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-${{inputs.integrity_run_id || '37038236847'}}
+          path: integrity_artifact
+          run-id: ${{inputs.integrity_run_id || '37038236847'}}
+          github-token: ${{secrets.GITHUB_TOKEN}}
+      - name: Restore backtest inputs
+        run: |
+          mkdir -p data/processed/adjusted data/input results/factor_diagnostics
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+          cp integrity_artifact/data/input/nifty500_membership.csv data/input/
+      - name: Run factor diagnostics
+        run: |
+          python scripts/run_fluidq_factor_diagnostics.py \
+            --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
+            --membership data/input/nifty500_membership.csv \
+            --outdir results/factor_diagnostics
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-factor-diagnostics
+          path: results/factor_diagnostics/
+          retention-days: 30
