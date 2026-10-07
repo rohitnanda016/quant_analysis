@@ -66,8 +66,9 @@ def main():
     overlap_rows = []
     rank_identity_rows = []
 
-    for rd in reb_dates:
-        snap = df[df.date == rd].copy()
+    rebalance_df = df[df["date"].isin(reb_dates)].copy()
+    for rd, snap in rebalance_df.groupby("date", sort=True):
+        snap = snap.copy()
         if snap.empty:
             continue
 
