@@ -1,0 +1,68 @@
+name: FLUID-Q V1.2 Factor Compression
+
+on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - ".github/workflows/fluidq-factor-compression.yml"
+      - "scripts/run_fluidq_backtest.py"
+  workflow_dispatch:
+    inputs:
+      integrity_run_id:
+        description: "Validated price-integrity workflow run"
+        required: true
+        default: "37038236847"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - name: baseline_5factor
+            weights: "0.20,0.15,0.20,0.20,0.15"
+          - name: drop_rs6_original_renorm
+            weights: "0.25,0.1875,0,0.25,0.1875"
+          - name: equal_4factor
+            weights: "0.25,0.25,0,0.25,0.25"
+          - name: trend_ram_12m_only
+            weights: "0,0.3333333333,0,0.3333333333,0.3333333334"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-${{inputs.integrity_run_id || '37038236847'}}
+          path: integrity_artifact
+          run-id: ${{inputs.integrity_run_id || '37038236847'}}
+          github-token: ${{secrets.GITHUB_TOKEN}}
+      - name: Restore backtest inputs
+        run: |
+          mkdir -p data/processed/adjusted data/input results/factor_compression
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+          cp integrity_artifact/data/input/nifty500_membership.csv data/input/
+      - name: Run compression backtest
+        run: |
+          python scripts/run_fluidq_backtest.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --events data/input/verified_corporate_events.csv             --factor-weights "${{matrix.weights}}"             --outdir "results/factor_compression/${{matrix.name}}"
+      - name: Run subperiod analysis
+        run: |
+          python scripts/run_fluidq_subperiods.py             --portfolio "results/factor_compression/${{matrix.name}}/portfolio_daily.csv"             --signals "results/factor_compression/${{matrix.name}}/rebalance_signals.csv"             --outdir "results/factor_compression/${{matrix.name}}/subperiods"
+      - name: Upload compression result
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-factor-compression-${{matrix.name}}
+          path: "results/factor_compression/${{matrix.name}}/"
+          retention-days: 30
