@@ -25,6 +25,14 @@ def stats(x):
     dd = nav / nav.cummax() - 1
     return {"cagr": cagr, "sharpe": sharpe, "max_drawdown": float(dd.min()), "final_nav": float(nav.iloc[-1])}
 
+def prepare_nifty_cache(prices_path, cache_path):
+    from scripts.run_fluidq_backtest import load_nifty500_index
+    dates=pd.read_csv(prices_path,usecols=["date"])["date"]
+    idx=load_nifty500_index(dates)
+    idx.to_csv(cache_path,index=False)
+    print(f"Prepared shared Nifty 500 cache: {len(idx)} rows")
+
+
 def run_candidate(args, name, weights, root):
     out = root / name
     if (out / "portfolio_daily.csv").exists():
@@ -35,6 +43,7 @@ def run_candidate(args, name, weights, root):
         "--factor-weights", weights, "--outdir", str(out),
         "--top-n", str(args.top_n), "--transaction-cost", str(args.transaction_cost),
         "--rebalance-frequency", args.rebalance_frequency,
+        "--nifty500-index", args.nifty500_index,
     ]
     subprocess.run(cmd, check=True)
 
@@ -49,8 +58,14 @@ def main():
     ap.add_argument("--rebalance-frequency", choices=["monthly", "quarterly"], default="monthly")
     ap.add_argument("--train-years", type=int, default=3)
     ap.add_argument("--test-years", type=int, default=1)
+    ap.add_argument("--nifty500-index", default="results/walk_forward/nifty500_index.csv")
     a = ap.parse_args()
     root = Path(a.outdir); root.mkdir(parents=True, exist_ok=True)
+    cache_path = Path(a.nifty500_index)
+    if not cache_path.is_absolute(): cache_path = Path.cwd() / cache_path
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    prepare_nifty_cache(a.prices, cache_path)
+    a.nifty500_index = str(cache_path)
     from concurrent.futures import ThreadPoolExecutor, as_completed
     with ThreadPoolExecutor(max_workers=1) as ex:
         futures = [ex.submit(run_candidate, a, name, weights, root) for name, weights in CANDIDATES.items()]

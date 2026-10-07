@@ -76,6 +76,21 @@ def load_nifty500_index(required_dates):
     return idx
 
 
+def load_nifty500_from_file(path, required_dates):
+    idx=pd.read_csv(path,parse_dates=["date"])
+    required=pd.DatetimeIndex(sorted(pd.to_datetime(required_dates).unique()))
+    needed={"date","nifty500_close","nifty500_ret_6m","nifty500_dma200"}
+    missing=needed-set(idx.columns)
+    if missing: raise ValueError(f"Nifty 500 cache missing columns: {sorted(missing)}")
+    idx["date"]=pd.to_datetime(idx["date"],errors="coerce")
+    for c in needed-{"date"}: idx[c]=pd.to_numeric(idx[c],errors="coerce")
+    idx=idx.dropna(subset=["date","nifty500_close"]).sort_values("date").drop_duplicates("date")
+    coverage=float(idx["date"].isin(required).mean())
+    if len(idx)<500 or coverage<0.95:
+        raise ValueError(f"Insufficient cached Nifty 500 index history: {len(idx)} rows, coverage={coverage:.1%}, requested={len(required)}")
+    return idx
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--prices",required=True); ap.add_argument("--membership",required=True)
@@ -86,6 +101,7 @@ def main():
     ap.add_argument("--sector-membership",default=None)
     ap.add_argument("--sector-constrained",action="store_true")
     ap.add_argument("--factor-weights",default="0.20,0.15,0.20,0.20,0.15")
+    ap.add_argument("--nifty500-index",default=None,help="Prebuilt Nifty 500 daily cache; avoids repeated NSE archive downloads.")
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
     raw_weights=[float(x.strip()) for x in a.factor_weights.split(",")]
     if len(raw_weights)!=5 or any(x<0 for x in raw_weights) or sum(raw_weights)<=0: raise ValueError("--factor-weights must contain five non-negative values with positive sum")
@@ -119,7 +135,7 @@ def main():
     df["ram"]=df["ret_6m"]/df["vol126"].replace(0,np.nan)
     df["adv60"]=g["turnover"].transform(lambda s:s.rolling(60,min_periods=40).mean()) if "turnover" in df else np.nan
 
-    nifty=load_nifty500_index(df["date"].unique())
+    nifty=load_nifty500_from_file(a.nifty500_index,df["date"].unique()) if a.nifty500_index else load_nifty500_index(df["date"].unique())
     df=df.merge(nifty[["date","nifty500_close","nifty500_ret_6m","nifty500_dma200"]],on="date",how="left")
 
     members=load_membership(a.membership)
@@ -230,7 +246,7 @@ def main():
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"]); dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
