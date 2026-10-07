@@ -1,4 +1,5 @@
 name: FLUID-Q V1 Factor Attribution
+# Research-only attribution workflow; no production parameters are changed.
 # Parameter-neutral factor ablation: each test removes one factor and renormalizes
 # the remaining original weights. No thresholds, universe, timing, or costs change.
 
