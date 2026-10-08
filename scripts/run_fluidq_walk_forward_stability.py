@@ -66,6 +66,44 @@ def evaluate(series, train_years, test_years, rule):
     return {"train_years": train_years, "test_years": test_years, "selection_rule": rule,
             "folds": folds, "stitched_oos": stats(stitched)}
 
+def evaluate_consensus(series, train_windows, test_years, rule="sharpe"):
+    all_dates = sorted(set().union(*(s.index for s in series.values())))
+    first = pd.Timestamp(min(all_dates)).normalize()
+    last = pd.Timestamp(max(all_dates)).normalize()
+    folds, stitched = [], []
+    test_start = pd.Timestamp(year=first.year + max(train_windows), month=1, day=1)
+    while test_start <= last:
+        scores = pd.DataFrame(index=list(series.keys()))
+        for years in train_windows:
+            train_start = pd.Timestamp(year=test_start.year - years, month=1, day=1)
+            table = pd.DataFrame([
+                {"candidate": name, **stats(s[(s.index >= train_start) & (s.index < test_start)])}
+                for name, s in series.items()
+            ]).set_index("candidate")
+            if rule == "sharpe":
+                metric = table["sharpe"]
+            elif rule == "cagr":
+                metric = table["cagr"]
+            else:
+                metric = table["cagr"] / table["max_drawdown"].abs().replace(0, np.nan)
+            scores[f"{years}y_rank"] = metric.rank(ascending=False, method="average")
+        scores["mean_rank"] = scores.mean(axis=1)
+        winner = str(scores.sort_values(["mean_rank"]).index[0])
+        test_end = min(pd.Timestamp(year=test_start.year + test_years - 1, month=12, day=31), last)
+        oos = series[winner][(series[winner].index >= test_start) & (series[winner].index <= test_end)]
+        stitched.append(oos)
+        folds.append({
+            "train_windows": train_windows, "test_start": str(test_start.date()),
+            "test_end": str(test_end.date()), "winner": winner,
+            "mean_rank": float(scores.loc[winner, "mean_rank"]),
+            "candidate_mean_ranks": scores["mean_rank"].sort_values().to_dict(),
+            "oos": stats(oos),
+        })
+        test_start = pd.Timestamp(year=test_start.year + test_years, month=1, day=1)
+    stitched = pd.concat(stitched).sort_index() if stitched else pd.Series(dtype=float)
+    return {"train_windows": train_windows, "test_years": test_years,
+            "selection_rule": rule, "folds": folds, "stitched_oos": stats(stitched)}
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True); ap.add_argument("--membership", required=True)
@@ -101,6 +139,11 @@ def main():
                 result["transaction_cost"] = cost
                 evaluations.append(result)
 
+    consensus = {}
+    for cost in costs:
+        if cost == 0.003:
+            consensus[cost] = evaluate_consensus(series_by_cost[cost], [2, 3, 4], 1, "sharpe")
+
     fixed = {}
     base_cost = series_by_cost[0.003]
     all_dates = sorted(set().union(*(s.index for s in base_cost.values())))
@@ -127,6 +170,7 @@ def main():
             "fixed_benchmark": "same six candidates stitched over the 3Y/1Y calendar OOS periods",
         },
         "evaluations": evaluations,
+        "consensus_evaluations": consensus,
         "fixed_candidate_benchmarks": fixed_stats,
         "note": "Stability diagnostic only. No candidate or weighting is promoted without further economic and statistical validation."
     }
