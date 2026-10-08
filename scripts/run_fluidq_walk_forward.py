@@ -26,6 +26,7 @@ def stats(x):
     return {"cagr": cagr, "sharpe": sharpe, "max_drawdown": float(dd.min()), "final_nav": float(nav.iloc[-1])}
 
 def prepare_nifty_cache(prices_path, cache_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.run_fluidq_backtest import load_nifty500_index
     dates=pd.read_csv(prices_path,usecols=["date"])["date"]
     idx=load_nifty500_index(dates)
