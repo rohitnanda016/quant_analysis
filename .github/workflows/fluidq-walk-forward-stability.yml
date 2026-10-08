@@ -4,6 +4,7 @@ on:
   push:
     branches: [v1.2-factor-attribution]
     paths:
+      - "scripts/run_fluidq_walk_forward_stability.py"
       - "scripts/run_fluidq_walk_forward.py"
       - "scripts/run_fluidq_backtest.py"
       - ".github/workflows/fluidq-walk-forward-stability.yml"
@@ -11,13 +12,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  walk-forward-stability:
-    strategy:
-      fail-fast: false
-      matrix:
-        train_years: [2, 3, 4]
+  stability:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,36 +36,13 @@ jobs:
           cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
           test -s data/input/verified_corporate_events.csv
-      - name: Run walk-forward selection
+      - name: Run walk-forward stability diagnostics
         run: |
-          python scripts/run_fluidq_walk_forward.py \
-            --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
-            --membership data/input/nifty500_membership.csv \
-            --events data/input/verified_corporate_events.csv \
-            --outdir results/walk_forward \
-            --train-years ${{ matrix.train_years }} \
-            --test-years 1 \
-            --top-n 15 \
-            --transaction-cost 0.003 \
-            --rebalance-frequency monthly
-      - name: Add stability metadata
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          p = Path("results/walk_forward/walk_forward_summary.json")
-          d = json.loads(p.read_text())
-          d["stability_experiment"] = {
-              "training_window_years": int("${{ matrix.train_years }}"),
-              "test_window_years": 1,
-              "purpose": "Pre-specified walk-forward training-window stability test"
-          }
-          p.write_text(json.dumps(d, indent=2))
-          PY
-      - name: Upload walk-forward results
+          python scripts/run_fluidq_walk_forward_stability.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --events data/input/verified_corporate_events.csv             --outdir results/walk_forward_stability             --top-n 15             --rebalance-frequency monthly
+      - name: Upload stability results
         uses: actions/upload-artifact@v4
         with:
-          name: fluidq-walk-forward-stability-${{ matrix.train_years }}y
-          path: results/walk_forward/
+          name: fluidq-walk-forward-stability
+          path: results/walk_forward_stability/
           retention-days: 30
           if-no-files-found: error
