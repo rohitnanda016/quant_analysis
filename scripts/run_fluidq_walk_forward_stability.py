@@ -187,6 +187,7 @@ def main():
             (e["transaction_cost"], e["train_years"], e["selection_rule"], e["stitched_oos"])
             for e in evaluations
         ],
+        "consensus_evaluations": consensus,
         "fixed_candidate_benchmarks": fixed_stats
     }, indent=2, default=str))
 
