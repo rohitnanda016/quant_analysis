@@ -5,6 +5,7 @@ on:
     branches: [v1.2-factor-attribution]
     paths:
       - "scripts/run_fluidq_walk_forward_stability.py"
+      - "scripts/run_fluidq_consensus_bootstrap.py"
       - "scripts/run_fluidq_walk_forward.py"
       - "scripts/run_fluidq_backtest.py"
       - ".github/workflows/fluidq-walk-forward-stability.yml"
@@ -39,6 +40,8 @@ jobs:
       - name: Run walk-forward stability diagnostics
         run: |
           python scripts/run_fluidq_walk_forward_stability.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --events data/input/verified_corporate_events.csv             --outdir results/walk_forward_stability             --top-n 15             --rebalance-frequency monthly
+      - name: Paired consensus bootstrap diagnostic
+        run: python scripts/run_fluidq_consensus_bootstrap.py --outdir results/walk_forward_stability
       - name: Upload stability results
         uses: actions/upload-artifact@v4
         with:
