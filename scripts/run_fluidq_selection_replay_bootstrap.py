@@ -104,8 +104,7 @@ def run(root, block=21, replications=5000, seed=20261010):
             score_matrix = np.vstack(scores)
             ranks = np.empty_like(score_matrix)
             for row in range(score_matrix.shape[0]):
-                order = np.argsort(np.argsort(-score_matrix[row], kind="mergesort"), kind="mergesort")
-                ranks[row] = order + 1
+                ranks[row] = pd.Series(score_matrix[row]).rank(ascending=False, method="average").to_numpy()
             mean_rank = ranks.mean(axis=0)
             winner_idx = int(np.argmin(mean_rank))
             test = sampled[fold["start"]:fold["end"], :]
