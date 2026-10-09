@@ -226,28 +226,56 @@ def main():
 
     sig=pd.DataFrame(snapshots)
     if sig.empty: raise ValueError("No rebalance snapshots produced")
-    sig["date"]=pd.to_datetime(sig.date); daily=[]
-    for i,r in sig.iterrows():
-        signal_date=pd.Timestamp(r.date); next_signal=pd.Timestamp(sig.iloc[i+1].date) if i+1<len(sig) else pd.Timestamp(price_dates[-1]); pos=[x for x in str(r.holdings).split(",") if x]
-        if not pos: continue
+    sig["date"]=pd.to_datetime(sig.date)
+    # Build a complete close-to-close return panel so delayed executions never
+    # drop market sessions. A new portfolio becomes active after the execution
+    # date's close; the previously held portfolio earns that day's return.
+    price_panel=df.pivot(index="date",columns="symbol",values="close").sort_index()
+    price_panel=price_panel.reindex(index=pd.to_datetime(price_dates))
+    price_returns=price_panel.pct_change(fill_method=None)
+    executions={}
+    for _,r in sig.iterrows():
+        signal_date=pd.Timestamp(r.date)
         future=price_dates[price_dates>signal_date]
         if len(future)<a.execution_lag_days: continue
-        execd=pd.Timestamp(future[a.execution_lag_days-1]); px2=df[df.symbol.isin(pos)&(df.date>=execd)&(df.date<=next_signal)].copy()
-        if px2.empty: continue
-        piv=px2.pivot(index="date",columns="symbol",values="close").sort_index()
-        # Preserve intended equal weights; never renormalize because a selected name
-        # happens to be missing from a daily price panel.
-        price_returns=piv.pct_change(fill_method=None).reindex(columns=pos)
-        if set(pos)-set(price_returns.columns):
-            missing=sorted(set(pos)-set(price_returns.columns))
-            raise ValueError(f"Missing selected symbols in execution window {signal_date.date()}: {missing}")
-        rets=price_returns.mean(axis=1,skipna=False).fillna(0)*float(r.exposure); cost=float(r.turnover)*a.transaction_cost
-        if len(rets): rets.iloc[0]-=cost
-        for dd,rr in rets.items(): daily.append((dd,float(rr),signal_date))
-    dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values(["date","signal_date"]); dr=dr.groupby("date",as_index=False).agg({"ret":"first","signal_date":"first"}).sort_values("date")
+        execd=pd.Timestamp(future[a.execution_lag_days-1])
+        if execd in executions:
+            raise ValueError(f"Multiple rebalance executions mapped to {execd.date()}")
+        pos=[x for x in str(r.holdings).split(",") if x]
+        missing=sorted(set(pos)-set(price_returns.columns))
+        if missing:
+            raise ValueError(f"Missing selected symbols in price panel {signal_date.date()}: {missing}")
+        executions[execd]={"signal_date":signal_date,"positions":pos,"exposure":float(r.exposure),"turnover":float(r.turnover)}
+    active_positions=[]
+    active_exposure=0.0
+    active_signal_date=None
+    daily=[]
+    for dd in pd.to_datetime(price_returns.index):
+        rr=0.0
+        if active_positions:
+            day_returns=price_returns.loc[dd,active_positions]
+            # Keep equal weights fixed. If a selected price is missing on a date,
+            # fail visibly rather than silently deleting the date or renormalizing.
+            if day_returns.isna().any():
+                missing=day_returns.index[day_returns.isna()].tolist()
+                raise ValueError(f"Missing daily return(s) for held symbols on {dd.date()}: {missing[:10]}")
+            rr=float(day_returns.mean())*active_exposure
+        event=executions.get(pd.Timestamp(dd))
+        if event:
+            rr-=event["turnover"]*a.transaction_cost
+            row_signal_date=active_signal_date if active_signal_date is not None else event["signal_date"]
+        else:
+            row_signal_date=active_signal_date
+        if active_positions or event:
+            daily.append((pd.Timestamp(dd),float(rr),row_signal_date))
+        if event:
+            active_positions=event["positions"]
+            active_exposure=event["exposure"]
+            active_signal_date=event["signal_date"]
+    dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
