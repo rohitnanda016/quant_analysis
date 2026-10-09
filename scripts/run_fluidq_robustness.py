@@ -36,7 +36,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         for name,n,tc,freq,lag in variants:
             vout=Path(td)/name; vout.mkdir()
-            cmd=[sys.executable,"scripts/run_fluidq_backtest.py","--prices",a.prices,"--membership",a.membership,"--events",a.events,"--outdir",str(vout),"--top-n",str(n),"--transaction-cost",str(tc),"--rebalance-frequency",freq]
+            cmd=[sys.executable,"scripts/run_fluidq_backtest.py","--prices",a.prices,"--membership",a.membership,"--events",a.events,"--outdir",str(vout),"--top-n",str(n),"--transaction-cost",str(tc),"--rebalance-frequency",freq,"--execution-lag-days",str(lag)]
             subprocess.run(cmd,check=True)
             p=pd.read_csv(vout/"portfolio_daily.csv",parse_dates=["date","signal_date"]); s=pd.read_csv(vout/"rebalance_signals.csv",parse_dates=["date"])
             m=p.merge(tri[["date","bench_ret"]],on="date",how="inner")
@@ -46,7 +46,7 @@ def main():
             matched_cagr,_,_,_,_=stats(m["bench_ret"]*m["exposure"]); bench_cagr,_,_,_,_=stats(m["bench_ret"])
             rows.append({"variant":name,"top_n":n,"transaction_cost":tc,"rebalance_frequency":freq,"execution_lag_days":lag,"cagr":cagr,"max_drawdown":dd,"volatility":vol,"sharpe_rf0":sharpe,"final_nav":nav,"avg_turnover":float(s.turnover.mean()),"avg_exposure":float(s.exposure.mean()),"rebalance_count":int(len(s)),"nifty500_tri_cagr":bench_cagr,"regime_matched_cagr":matched_cagr,"excess_vs_nifty500":cagr-bench_cagr,"excess_vs_regime_matched":cagr-matched_cagr})
     res=pd.DataFrame(rows); res.to_csv(out/"robustness_summary.csv",index=False)
-    payload={"benchmark_source":"Independent snapshot of Nifty 500 TRI sourced from Nifty Indices","benchmark_snapshot_url":TRI_URL,"benchmark_coverage":"2019-12-02 through 2026-09-25","variants_tested":len(res),"execution_lag_convention":"1=first trading session after signal close; 2/3 delay execution by one/two additional sessions; cost charged at execution","note":"Sensitivity analysis changes only portfolio size, transaction cost, and rebalance frequency. Signal definitions and eligibility rules are otherwise unchanged.","results":res.to_dict(orient="records")}
+    payload={"benchmark_source":"Independent snapshot of Nifty 500 TRI sourced from Nifty Indices","benchmark_snapshot_url":TRI_URL,"benchmark_coverage":"2019-12-02 through 2026-09-25","variants_tested":len(res),"execution_lag_convention":"1=first trading session after signal close; 2/3 delay execution by one/two additional sessions; cost charged at execution","note":"Sensitivity analysis varies portfolio size, transaction cost, rebalance frequency and execution lag. Signal definitions and eligibility rules are otherwise unchanged.","results":res.to_dict(orient="records")}
     (out/"robustness_summary.json").write_text(json.dumps(payload,indent=2)); print(json.dumps(payload,indent=2))
 
 if __name__=="__main__": main()
