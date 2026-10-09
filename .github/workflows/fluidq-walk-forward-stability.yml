@@ -7,6 +7,7 @@ on:
       - "scripts/run_fluidq_walk_forward_stability.py"
       - "scripts/run_fluidq_consensus_bootstrap.py"
       - "scripts/run_fluidq_candidate_max_bootstrap.py"
+      - "scripts/run_fluidq_selection_replay_bootstrap.py"
       - "scripts/run_fluidq_walk_forward.py"
       - "scripts/run_fluidq_backtest.py"
       - ".github/workflows/fluidq-walk-forward-stability.yml"
@@ -45,6 +46,8 @@ jobs:
         run: python scripts/run_fluidq_consensus_bootstrap.py --outdir results/walk_forward_stability
       - name: Candidate-menu max-statistic bootstrap
         run: python scripts/run_fluidq_candidate_max_bootstrap.py --outdir results/walk_forward_stability
+      - name: Selection-replay bootstrap for adaptive consensus
+        run: python scripts/run_fluidq_selection_replay_bootstrap.py --outdir results/walk_forward_stability
       - name: Upload stability results
         uses: actions/upload-artifact@v4
         with:
