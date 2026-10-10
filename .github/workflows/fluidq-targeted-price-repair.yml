@@ -1,0 +1,77 @@
+name: FLUID-Q Targeted Price Gap Repair
+
+on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - "scripts/repair_known_price_gaps.py"
+      - ".github/workflows/fluidq-targeted-price-repair.yml"
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "Finalized full-history workflow run to repair"
+        required: true
+        default: "36875371038"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repair-and-rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download finalized dataset
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-finalized-full-history-${{ inputs.base_run_id || '36875371038' }}
+          path: base_artifact
+          run-id: ${{ inputs.base_run_id || '36875371038' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore raw prices and membership
+        run: |
+          mkdir -p data/raw data/input data/processed/adjusted results/price_quality
+          cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
+          cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
+      - name: Repair held-symbol gaps from NSE archives
+        run: |
+          python scripts/repair_known_price_gaps.py \
+            --prices data/raw/stage_a_prices.csv \
+            --out data/raw/stage_a_prices_repaired.csv
+          mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
+          cat data/raw/stage_a_prices_repaired.repair.json
+      - name: Audit raw price quality
+        run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
+      - name: Fetch NSE corporate actions
+        run: python scripts/fetch_nse_corporate_actions.py --start 2014-01-01 --end 2026-08-31 --out data/input/nse_corporate_actions_2014_2026.csv
+      - name: Reconcile extreme returns against NSE actions
+        run: python scripts/reconcile_extreme_returns.py --extremes results/price_quality/extreme_returns_raw.csv --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --out results/price_quality/extreme_return_reconciliation.csv
+      - name: Build full split and bonus adjustment table
+        run: python scripts/build_price_adjustment_actions.py --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --supplemental data/input/verified_manual_corporate_actions.csv --out data/input/verified_price_adjustment_actions.csv
+      - name: Apply full split and bonus adjustments
+        run: python scripts/apply_verified_adjustments.py --prices data/raw/stage_a_prices.csv --actions data/input/verified_price_adjustment_actions.csv --symbol-map data/input/verified_symbol_map.csv --out data/processed/adjusted/prices_adjusted_split_bonus.csv
+      - name: Audit post-adjustment corporate-action continuity
+        run: python scripts/audit_post_adjustment.py --extremes results/price_quality/extreme_returns_raw.csv --reconciliation results/price_quality/extreme_return_reconciliation.csv --adjusted data/processed/adjusted/prices_adjusted_split_bonus.csv --outdir results/price_quality/post_adjustment
+      - name: Inspect remaining extreme events
+        run: python scripts/inspect_extreme_events.py --events results/price_quality/post_adjustment/post_adjustment_extreme_events.csv --actions data/input/nse_corporate_actions_2014_2026.csv --top 120
+      - name: Upload repaired price-integrity artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-integrity-${{ github.run_id }}
+          path: |
+            results/price_quality/
+            data/raw/stage_a_prices.csv
+            data/raw/stage_a_prices_repaired.repair.json
+            data/processed/adjusted/prices_adjusted_split_bonus.csv
+            data/input/nifty500_membership.csv
+            data/input/nse_corporate_actions_2014_2026.csv
+            data/input/verified_price_adjustment_actions.csv
+            data/input/verified_manual_corporate_actions.csv
+          retention-days: 30
