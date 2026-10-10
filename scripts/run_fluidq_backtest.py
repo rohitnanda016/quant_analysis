@@ -277,7 +277,36 @@ def main():
             # fail visibly rather than silently deleting the date or renormalizing.
             if day_returns.isna().any():
                 missing=day_returns.index[day_returns.isna()].tolist()
-                raise ValueError(f"Missing daily return(s) for held symbols on {dd.date()}: {missing[:10]}")
+                # Emit an evidence-based gap audit before stopping. This distinguishes
+                # a missing row, a null close, a long suspension, and an exhausted
+                # history; do not extend stale-price filling without inspecting it.
+                diagnostics=[]
+                for sym in missing[:10]:
+                    series=price_panel[sym]
+                    prior=series.loc[series.index < dd].dropna()
+                    future=series.loc[series.index > dd].dropna()
+                    raw=df.loc[df["symbol"].eq(sym), ["date","close"]].copy()
+                    raw=raw.sort_values("date")
+                    around=raw.loc[(raw["date"] >= dd-pd.Timedelta(days=45)) &
+                                   (raw["date"] <= dd+pd.Timedelta(days=45))]
+                    last_date=str(prior.index[-1].date()) if not prior.empty else "none"
+                    next_date=str(future.index[0].date()) if not future.empty else "none"
+                    last_close=float(prior.iloc[-1]) if not prior.empty else None
+                    next_close=float(future.iloc[0]) if not future.empty else None
+                    diagnostics.append({
+                        "symbol":sym,
+                        "last_valid_close_date":last_date,
+                        "last_valid_close":last_close,
+                        "next_valid_close_date":next_date,
+                        "next_valid_close":next_close,
+                        "raw_rows_total":int(len(raw)),
+                        "raw_rows_near_gap":around.assign(date=around["date"].dt.strftime("%Y-%m-%d")).to_dict("records"),
+                        "raw_close_nulls_total":int(raw["close"].isna().sum()),
+                    })
+                raise ValueError(
+                    f"Missing daily return(s) for held symbols on {dd.date()}: {missing[:10]}; "
+                    f"gap_audit={json.dumps(diagnostics, default=str)}"
+                )
             rr=float(day_returns.mean())*active_exposure
         event=executions.get(pd.Timestamp(dd))
         if event:
