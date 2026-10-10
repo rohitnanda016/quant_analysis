@@ -123,7 +123,26 @@ def main():
     datec=find_col(df,["date"]); symc=find_col(df,["canonical_symbol","symbol"])
     closec=find_col(df,["close"]); vwapc=find_col(df,["vwap"])
     turnc=find_col(df,["turnover_₹","turnover","turnover_rs"])
+    seriesc=find_col(df,["series"])
     if not all([datec,symc,closec]): raise ValueError("Required price columns missing")
+    # The source can contain multiple NSE series for the same issuer, e.g.
+    # IBVENTURES-EQ (fully paid shares) and IBVENTURES-E1 (partly paid shares).
+    # E1 was suspended from 2018-07-30 to 2018-10-11 while EQ continued trading.
+    # Mixing series and dropping duplicates by symbol/date creates a false
+    # multi-month price gap and can select the wrong security. This strategy
+    # trades ordinary fully-paid EQ shares only; filter explicitly when series
+    # metadata exists, and fail if that filter would leave no usable rows.
+    if seriesc:
+        series_values=df[seriesc].astype(str).str.upper().str.strip()
+        eq_mask=series_values.eq("EQ")
+        if eq_mask.any():
+            before=len(df)
+            df=df.loc[eq_mask].copy()
+            print(json.dumps({"series_filter":"EQ","series_column":seriesc,
+                              "rows_before":int(before),"rows_after":int(len(df)),
+                              "rows_excluded":int(before-len(df))}),flush=True)
+        else:
+            raise ValueError(f"Series column {seriesc!r} exists but contains no EQ rows; refusing to mix security series")
     if symc != "symbol" and "symbol" in df.columns: df=df.drop(columns=["symbol"])
     ren={datec:"date",symc:"symbol",closec:"close"}
     if vwapc: ren[vwapc]="vwap"
