@@ -8,6 +8,16 @@ import pandas as pd
 
 NSE_INDEX_URL = "https://archives.nseindia.com/content/indices/ind_close_all_{date}.csv"
 
+# NSE changed the trading symbol for the same listed security. Canonicalize
+# historical aliases before feature calculation so momentum and daily returns
+# continue across the symbol change instead of creating an artificial data gap.
+SYMBOL_ALIASES = {
+    "SKSMICRO": "BHARATFIN",  # NSE symbol change effective 2016-07-01
+}
+
+def canonicalize_symbol(series):
+    return series.astype(str).str.upper().str.strip().replace(SYMBOL_ALIASES)
+
 
 def find_col(df, candidates):
     low={c.lower().strip():c for c in df.columns}
@@ -24,7 +34,7 @@ def load_membership(path):
     sym=find_col(m,["symbol","security","security_symbol","ticker"])
     if not sym: raise ValueError(f"Could not identify membership symbol column: {list(m.columns)}")
     m=m.rename(columns={sym:"symbol"})
-    m["symbol"]=m["symbol"].astype(str).str.upper().str.strip()
+    m["symbol"]=canonicalize_symbol(m["symbol"])
     start=find_col(m,["review_date","effective_date","start_date","date"])
     end=find_col(m,["end_date"])
     m["effective_date"]=pd.to_datetime(m[start],errors="coerce") if start else pd.NaT
@@ -122,7 +132,7 @@ def main():
     if list(df.columns).count("symbol")>1:
         inds=[i for i,c in enumerate(df.columns) if c=="symbol"]
         df=df.iloc[:,[i for i,c in enumerate(df.columns) if c!="symbol" or i==inds[-1]]]
-    df["date"]=pd.to_datetime(df["date"]); df["symbol"]=df["symbol"].astype(str).str.upper().str.strip()
+    df["date"]=pd.to_datetime(df["date"]); df["symbol"]=canonicalize_symbol(df["symbol"])
     for c in ["close","vwap","turnover"]:
         if c in df: df[c]=pd.to_numeric(df[c],errors="coerce")
     df=df.sort_values(["symbol","date"]).drop_duplicates(["symbol","date"])
