@@ -1,0 +1,53 @@
+name: FLUID-Q V1.2 Walk-Forward Factor Selection
+
+on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - "scripts/run_fluidq_walk_forward.py"
+      - "scripts/run_fluidq_backtest.py"
+      - ".github/workflows/fluidq-walk-forward.yml"
+      - "data/input/verified_corporate_events.csv"
+  workflow_dispatch:
+
+jobs:
+  walk-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-37038236847
+          path: integrity_artifact
+          run-id: 37038236847
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Restore backtest inputs
+        run: |
+          mkdir -p data/processed/adjusted data/input
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+          cp integrity_artifact/data/input/nifty500_membership.csv data/input/
+          test -s data/input/verified_corporate_events.csv
+
+      - name: Run walk-forward selection
+        run: |
+          python scripts/run_fluidq_walk_forward.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --events data/input/verified_corporate_events.csv             --outdir results/walk_forward             --train-years 3             --test-years 1             --top-n 15             --transaction-cost 0.003             --rebalance-frequency monthly
+
+      - name: Upload walk-forward results
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-walk-forward-factor-selection
+          path: results/walk_forward/
+          retention-days: 30
+          if-no-files-found: error

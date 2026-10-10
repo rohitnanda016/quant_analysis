@@ -1,0 +1,109 @@
+name: FLUID-Q Economic Validity Gate
+
+on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - "scripts/run_fluidq_backtest.py"
+      - "scripts/run_fluidq_robustness.py"
+      - "scripts/audit_economic_gate.py"
+      - ".github/workflows/fluidq-economic-gate.yml"
+      - "data/input/verified_corporate_events.csv"
+  workflow_dispatch:
+    inputs:
+      integrity_run_id:
+        description: "Price-integrity workflow run whose artifact should be audited"
+        required: true
+        default: "37038236847"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gate-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-${{ inputs.integrity_run_id || '37038236847' }}
+          path: integrity_artifact
+          run-id: ${{ inputs.integrity_run_id || '37038236847' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Restore adjusted prices
+        run: |
+          mkdir -p data/processed/adjusted results/economic_gate
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+      - name: Audit dividend treatment and protect locked holdout
+        run: |
+          python scripts/audit_economic_gate.py \
+            --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
+            --holdout-start 2026-09-01 \
+            --out results/economic_gate/data_integrity_gate.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-economic-gate-audit
+          path: results/economic_gate/data_integrity_gate.json
+          retention-days: 30
+          if-no-files-found: error
+
+  execution-sensitivity:
+    needs: gate-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - "monthly_top15_tc0.15%"
+          - "monthly_top15_tc0.30%"
+          - "monthly_top15_tc0.50%"
+          - "monthly_top15_tc0.15%_lag2"
+          - "monthly_top15_tc0.30%_lag2"
+          - "monthly_top15_tc0.50%_lag2"
+          - "monthly_top15_tc0.15%_lag3"
+          - "monthly_top15_tc0.30%_lag3"
+          - "monthly_top15_tc0.50%_lag3"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-${{ inputs.integrity_run_id || '37038236847' }}
+          path: integrity_artifact
+          run-id: ${{ inputs.integrity_run_id || '37038236847' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Restore backtest inputs
+        run: |
+          mkdir -p data/processed/adjusted data/input results/economic_gate
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+          cp integrity_artifact/data/input/nifty500_membership.csv data/input/
+      - name: Run transaction-cost and execution-lag sensitivity
+        run: |
+          python scripts/run_fluidq_robustness.py \
+            --prices data/processed/adjusted/prices_adjusted_split_bonus.csv \
+            --membership data/input/nifty500_membership.csv \
+            --events data/input/verified_corporate_events.csv \
+            --variant "${{ matrix.variant }}" \
+            --outdir "results/economic_gate/${{ matrix.variant }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-economic-gate-${{ matrix.variant }}
+          path: results/economic_gate/${{ matrix.variant }}/
+          retention-days: 30
+          if-no-files-found: error

@@ -1,0 +1,57 @@
+name: FLUID-Q V1.2 Walk-Forward Stability
+
+on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - "scripts/run_fluidq_walk_forward_stability.py"
+      - "scripts/run_fluidq_consensus_bootstrap.py"
+      - "scripts/run_fluidq_candidate_max_bootstrap.py"
+      - "scripts/run_fluidq_selection_replay_bootstrap.py"
+      - "scripts/run_fluidq_walk_forward.py"
+      - "scripts/run_fluidq_backtest.py"
+      - ".github/workflows/fluidq-walk-forward-stability.yml"
+      - "data/input/verified_corporate_events.csv"
+  workflow_dispatch:
+
+jobs:
+  stability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download price-integrity artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-price-integrity-37038236847
+          path: integrity_artifact
+          run-id: 37038236847
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Restore backtest inputs
+        run: |
+          mkdir -p data/processed/adjusted data/input
+          cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
+          cp integrity_artifact/data/input/nifty500_membership.csv data/input/
+          test -s data/input/verified_corporate_events.csv
+      - name: Run walk-forward stability diagnostics
+        run: |
+          python scripts/run_fluidq_walk_forward_stability.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --events data/input/verified_corporate_events.csv             --outdir results/walk_forward_stability             --top-n 15             --rebalance-frequency monthly
+      - name: Paired consensus bootstrap diagnostic
+        run: python scripts/run_fluidq_consensus_bootstrap.py --outdir results/walk_forward_stability
+      - name: Candidate-menu max-statistic bootstrap
+        run: python scripts/run_fluidq_candidate_max_bootstrap.py --outdir results/walk_forward_stability
+      - name: Selection-replay bootstrap for adaptive consensus
+        run: python scripts/run_fluidq_selection_replay_bootstrap.py --outdir results/walk_forward_stability
+      - name: Upload stability results
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-walk-forward-stability
+          path: results/walk_forward_stability/
+          retention-days: 30
+          if-no-files-found: error
