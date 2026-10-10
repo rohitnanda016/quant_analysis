@@ -4,7 +4,7 @@ on:
   push:
     branches: [v1.2-factor-attribution]
     paths:
-      - "scripts/repair_known_price_gaps.py"
+      - "scripts/repair_ibhistorical_gap.py"
       - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
@@ -42,7 +42,7 @@ jobs:
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
       - name: Repair held-symbol gaps from NSE archives
         run: |
-          python scripts/repair_known_price_gaps.py \
+          python scripts/repair_ibhistorical_gap.py \
             --prices data/raw/stage_a_prices.csv \
             --out data/raw/stage_a_prices_repaired.csv
           mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
