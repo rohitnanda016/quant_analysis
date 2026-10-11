@@ -66,6 +66,9 @@ def parse_archive(payload, day):
         raise TypeError(f"Unexpected bhavcopy response type: {type(payload).__name__}")
 
     frame.columns = [norm(c).replace(" ", "_").replace("-", "_") for c in frame.columns]
+    # Legacy daily bhavcopy labels turnover in lakh rupees; UDiFF TtlTrfVal
+    # is already rupees. Normalize both to the source CSV's rupee unit.
+    turnover_is_lakh_rupees = "TURNOVER_LACS" in frame.columns
     rename = {}
     for target, choices in PRICE_COLS.items():
         for choice in choices:
@@ -85,6 +88,8 @@ def parse_archive(payload, day):
     for col in ["open", "high", "low", "last", "prev_close", "close", "vwap", "volume", "traded_value", "num_trades"]:
         if col in frame:
             frame[col] = pd.to_numeric(frame[col].astype(str).str.replace(",", "", regex=False), errors="coerce")
+    if turnover_is_lakh_rupees and "traded_value" in frame:
+        frame["traded_value"] = frame["traded_value"] * 100000.0
     return frame.dropna(subset=["symbol", "close"])
 
 
