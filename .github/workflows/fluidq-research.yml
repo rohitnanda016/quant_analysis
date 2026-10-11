@@ -151,6 +151,7 @@ jobs:
             --prices data/raw/stage_a_prices.csv \
             --out data/raw/stage_a_prices_repaired.csv \
             --no-trade-out data/input/verified_no_trade_dates.csv \
+            --exceptions-out data/input/unresolved_gap_exceptions.csv \
             --report results/latest/bhavcopy_gap_repair.json \
             --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" \
             --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500
@@ -220,6 +221,7 @@ jobs:
             data/processed/v6_2/
             data/input/nifty500_membership.csv
             data/input/verified_no_trade_dates.csv
+            data/input/unresolved_gap_exceptions.csv
             data/input/verified_symbol_map.csv
             results/latest/
             results/price_quality/
