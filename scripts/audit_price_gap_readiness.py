@@ -112,6 +112,7 @@ def main():
         + int(repair.get("already_present_alias_matches", 0))
     )
     unresolved_fetch_pairs = int(repair.get("unresolved_target_pairs_due_to_fetch_errors", -1))
+    min_bhavcopy_rows = int(repair.get("minimum_valid_bhavcopy_eq_rows", 0) or 0)
 
     post_summary = {}
     if args.post_adjustment_summary and Path(args.post_adjustment_summary).exists():
@@ -123,6 +124,8 @@ def main():
     gap_blockers = []
     if fetch_errors != 0:
         gap_blockers.append(f"{fetch_errors} daily bhavcopy date(s) failed; failed downloads are not no-trade evidence.")
+    if min_bhavcopy_rows < 500:
+        gap_blockers.append("Daily archive sanity threshold is missing or below 500 EQ rows; artifact cannot be used as verified no-trade evidence.")
     if target_pairs >= 0 and accounted < target_pairs:
         gap_blockers.append(f"Repair accounting mismatch: target_pairs={target_pairs}, accounted={accounted}.")
     if unresolved_fetch_pairs > 0:
@@ -161,6 +164,7 @@ def main():
             "bhavcopy_dates_attempted": repair.get("unique_bhavcopy_dates_attempted"),
             "bhavcopy_dates_parsed": repair.get("bhavcopy_dates_parsed"),
             "fetch_error_dates": fetch_errors,
+            "minimum_valid_bhavcopy_eq_rows": min_bhavcopy_rows,
             "rows_added": repair.get("rows_added"),
             "verified_no_trade_pairs": repair.get("verified_no_trade_pairs"),
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
