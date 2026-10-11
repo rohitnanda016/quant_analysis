@@ -113,6 +113,7 @@ def main():
     ap.add_argument("--sector-constrained",action="store_true")
     ap.add_argument("--factor-weights",default="0.20,0.15,0.20,0.20,0.15")
     ap.add_argument("--nifty500-index",default=None,help="Prebuilt Nifty 500 daily cache; avoids repeated NSE archive downloads.")
+    ap.add_argument("--verified-no-trade",default="data/input/verified_no_trade_dates.csv",help="Official bhavcopy-verified EQ no-trade pairs; permits carrying last close only on documented no-trade dates.")
     a=ap.parse_args(); out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
     raw_weights=[float(x.strip()) for x in a.factor_weights.split(",")]
     if len(raw_weights)!=5 or any(x<0 for x in raw_weights) or sum(raw_weights)<=0: raise ValueError("--factor-weights must contain five non-negative values with positive sum")
@@ -261,15 +262,62 @@ def main():
     # date's close; the previously held portfolio earns that day's return.
     price_panel=df.pivot(index="date",columns="symbol",values="close").sort_index()
     price_panel=price_panel.reindex(index=pd.to_datetime(price_dates))
-    # Some otherwise-live NSE symbols have isolated missing daily observations
-    # (for example, no reported close on a session). Carry the last observed
-    # close forward for at most 10 trading sessions: this is causal, avoids
-    # dropping market sessions, and lets the next observed close capture the
-    # cumulative move. Longer gaps and pre-listing dates remain missing and
-    # still fail if the symbol is held; they must not be silently zero-filled.
+    # Fill at most 10 unverified missing sessions under the existing policy.
+    # Longer gaps may only be carried forward when every missing symbol/date
+    # was checked against a successfully parsed official NSE EQ bhavcopy.
+    # The ledger stores verification metadata only; it never supplies prices.
     missing_price_cells_before_fill=int(price_panel.isna().sum().sum())
-    price_panel=price_panel.ffill(limit=10)
+    short_filled=price_panel.ffill(limit=10)
+    short_stale_cells_filled=missing_price_cells_before_fill-int(short_filled.isna().sum().sum())
+
+    verified_no_trade_pairs=0
+    verified_no_trade_cells_filled=0
+    no_trade_path=Path(a.verified_no_trade)
+    verified_no_trade_mask=pd.DataFrame(False,index=price_panel.index,columns=price_panel.columns)
+    if no_trade_path.exists() and no_trade_path.stat().st_size:
+        nt=pd.read_csv(no_trade_path,low_memory=False)
+        if not {"date","symbol","status"}.issubset(nt.columns):
+            raise ValueError(f"Verified no-trade ledger missing date/symbol/status columns: {list(nt.columns)}")
+        nt["date"]=pd.to_datetime(nt["date"],errors="coerce")
+        nt["symbol"]=nt["symbol"].astype(str).str.upper().str.strip()
+        nt=nt.loc[nt["status"].eq("verified_no_trade")].dropna(subset=["date","symbol"])
+        # The adjustment builder canonicalizes historical aliases to terminal
+        # symbols; apply the same lineage to the no-trade ledger.
+        alias_path=Path("data/input/verified_symbol_map.csv")
+        aliases={}
+        if alias_path.exists():
+            amap=pd.read_csv(alias_path)
+            for z in amap.itertuples():
+                old=str(getattr(z,"old_symbol","")).strip().upper()
+                new=str(getattr(z,"new_symbol","")).strip().upper()
+                if old and new and old!="NAN" and new!="NAN":
+                    aliases[old]=new
+                    aliases[new]=new
+        def terminal_alias(s):
+            s=str(s).strip().upper()
+            seen=set()
+            while s in aliases and s not in seen:
+                seen.add(s)
+                nxt=aliases[s]
+                if nxt==s: break
+                s=nxt
+            return s
+        nt["symbol"]=nt["symbol"].map(terminal_alias)
+        nt=nt.drop_duplicates(["date","symbol"])
+        verified_no_trade_pairs=int(len(nt))
+        col_lookup={str(s):s for s in verified_no_trade_mask.columns}
+        row_lookup={pd.Timestamp(d):d for d in verified_no_trade_mask.index}
+        for z in nt.itertuples(index=False):
+            dd=pd.Timestamp(z.date); sym=str(z.symbol)
+            if dd in row_lookup and sym in col_lookup:
+                verified_no_trade_mask.at[row_lookup[dd],col_lookup[sym]]=True
+
+    unlimited_filled=price_panel.ffill()
+    verified_fill_cells=price_panel.isna() & verified_no_trade_mask
+    verified_no_trade_cells_filled=int(verified_fill_cells.sum())
+    price_panel=short_filled.mask(verified_fill_cells,unlimited_filled)
     stale_price_cells_filled=missing_price_cells_before_fill-int(price_panel.isna().sum().sum())
+    remaining_unverified_missing=int(price_panel.isna().sum().sum())
     price_returns=price_panel.pct_change(fill_method=None)
     executions={}
     for _,r in sig.iterrows():
@@ -342,7 +390,7 @@ def main():
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "price_gap_policy":"Forward-fill the last observed close for at most 10 missing market sessions; this is causal and allows the next observed close to capture the cumulative move. Longer gaps and pre-listing dates remain missing and cause a held-symbol error.", "missing_price_cells_before_fill":missing_price_cells_before_fill, "stale_price_cells_filled":stale_price_cells_filled, "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "price_gap_policy":"Forward-fill up to 10 unverified missing sessions; extend mark-to-last-close only on dates marked verified_no_trade by a successfully parsed official NSE EQ bhavcopy. Raw prices are never fabricated; unverified longer gaps remain missing and fail if held.", "verified_no_trade_ledger":str(no_trade_path) if no_trade_path.exists() else None, "verified_no_trade_pairs":verified_no_trade_pairs, "verified_no_trade_cells_filled":verified_no_trade_cells_filled, "missing_price_cells_before_fill":missing_price_cells_before_fill, "short_stale_price_cells_filled":short_stale_cells_filled, "stale_price_cells_filled":stale_price_cells_filled, "remaining_unverified_missing_cells":remaining_unverified_missing, "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
