@@ -45,6 +45,26 @@ def main():
     nt["date"] = pd.to_datetime(nt["date"], errors="coerce")
     nt["symbol"] = nt["symbol"].astype(str).str.strip().str.upper()
     nt = nt[nt["status"].eq("verified_no_trade")].dropna(subset=["date", "symbol"])
+    ledger_evidence_issues = []
+    if not nt.empty:
+        evidence_fields = {"verification_source", "evidence_reference"}
+        if not evidence_fields.issubset(nt.columns):
+            ledger_evidence_issues.append("Approved no-trade ledger lacks verification_source/evidence_reference.")
+            nt = nt.iloc[0:0].copy()
+        else:
+            nt["verification_source"] = nt["verification_source"].astype(str).str.strip()
+            nt["evidence_reference"] = nt["evidence_reference"].astype(str).str.strip()
+            invalid_evidence = (
+                nt["verification_source"].eq("")
+                | nt["verification_source"].str.lower().isin(["nan", "nse daily bhavcopy eq universe"])
+                | nt["evidence_reference"].eq("")
+                | nt["evidence_reference"].str.lower().eq("nan")
+            )
+            if invalid_evidence.any():
+                ledger_evidence_issues.append(
+                    f"{int(invalid_evidence.sum())} approved no-trade row(s) lack independent evidence."
+                )
+            nt = nt.loc[~invalid_evidence].copy()
     no_trade = set(zip(nt["date"], nt["symbol"]))
 
     aliases = {}
@@ -138,6 +158,7 @@ def main():
         if invalid_quality:
             gap_blockers.append(f"Basic raw price-quality checks failed: {invalid_quality}.")
     gap_blockers = []
+    gap_blockers.extend(ledger_evidence_issues)
     if fetch_errors != 0:
         gap_blockers.append(f"{fetch_errors} daily bhavcopy date(s) failed; failed downloads are not no-trade evidence.")
     if min_bhavcopy_rows < 500:
@@ -192,6 +213,7 @@ def main():
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
             "accounted_target_pairs": accounted,
         },
+        "approved_no_trade_ledger_evidence_issues": ledger_evidence_issues,
         "remaining_long_internal_gap_spans": int(len(long_gap_spans)),
         "remaining_unverified_gap_pairs": int(len(missing_unverified)),
         "sample_unverified_gap_pairs": missing_unverified[:100],
