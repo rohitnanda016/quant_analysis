@@ -1,14 +1,11 @@
 name: FLUID-Q Price Integrity
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       base_run_id:
-        description: "Finalized full-history workflow run"
+        description: "Finalized full-history workflow run containing the raw-price source dataset"
         required: true
-        default: "36875371038"
 
 permissions:
   contents: read
@@ -17,7 +14,7 @@ permissions:
 jobs:
   price-integrity:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,41 +25,100 @@ jobs:
       - name: Download finalized dataset
         uses: actions/download-artifact@v5
         with:
-          name: fluidq-finalized-full-history-${{inputs.base_run_id || '36875371038'}}
+          name: fluidq-finalized-full-history-${{ inputs.base_run_id }}
           path: base_artifact
-          run-id: ${{inputs.base_run_id || '36875371038'}}
-          github-token: ${{secrets.GITHUB_TOKEN}}
-      - name: Restore inputs
+          run-id: ${{ inputs.base_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore raw prices and membership
         run: |
           mkdir -p data/raw data/input results/price_quality data/processed/adjusted
           cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
+      - name: Backfill long internal gaps from official daily NSE bhavcopy
+        id: bhavcopy_repair
+        continue-on-error: true
+        run: |
+          set +e
+          python scripts/repair_price_gaps_bhavcopy.py \
+            --prices data/raw/stage_a_prices.csv \
+            --out data/raw/stage_a_prices_repaired.csv \
+            --no-trade-out data/input/verified_no_trade_dates.csv \
+            --report results/price_quality/bhavcopy_gap_repair.json \
+            --start 2014-01-01 --end 2026-08-31 \
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --min-bhavcopy-eq-rows 500
+          rc=$?
+          if [ -s data/raw/stage_a_prices_repaired.csv ]; then
+            mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
+          fi
+          exit $rc
       - name: Audit raw price quality
+        id: raw_audit
+        continue-on-error: true
         run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
       - name: Fetch NSE corporate actions
+        id: fetch_actions
+        continue-on-error: true
         run: python scripts/fetch_nse_corporate_actions.py --start 2014-01-01 --end 2026-08-31 --out data/input/nse_corporate_actions_2014_2026.csv
       - name: Reconcile extreme returns against NSE actions
+        id: reconcile_actions
+        if: ${{ always() && steps.fetch_actions.outcome == 'success' && steps.raw_audit.outcome == 'success' }}
+        continue-on-error: true
         run: python scripts/reconcile_extreme_returns.py --extremes results/price_quality/extreme_returns_raw.csv --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --out results/price_quality/extreme_return_reconciliation.csv
-      - name: Build full split and bonus adjustment table
+      - name: Build split and bonus adjustment table
+        id: build_adjustments
+        if: ${{ always() && steps.fetch_actions.outcome == 'success' }}
+        continue-on-error: true
         run: python scripts/build_price_adjustment_actions.py --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --supplemental data/input/verified_manual_corporate_actions.csv --out data/input/verified_price_adjustment_actions.csv
-      - name: Apply full split and bonus adjustments
+      - name: Apply split and bonus adjustments
+        id: apply_adjustments
+        if: ${{ always() && steps.build_adjustments.outcome == 'success' }}
+        continue-on-error: true
         run: python scripts/apply_verified_adjustments.py --prices data/raw/stage_a_prices.csv --actions data/input/verified_price_adjustment_actions.csv --symbol-map data/input/verified_symbol_map.csv --out data/processed/adjusted/prices_adjusted_split_bonus.csv
-      - name: Audit post-adjustment corporate-action continuity
+      - name: Audit post-adjustment continuity
+        id: post_adjustment_audit
+        if: ${{ always() && steps.apply_adjustments.outcome == 'success' && steps.reconcile_actions.outcome == 'success' }}
+        continue-on-error: true
         run: python scripts/audit_post_adjustment.py --extremes results/price_quality/extreme_returns_raw.csv --reconciliation results/price_quality/extreme_return_reconciliation.csv --adjusted data/processed/adjusted/prices_adjusted_split_bonus.csv --outdir results/price_quality/post_adjustment
-      - name: Inspect remaining extreme events
-        run: python scripts/inspect_extreme_events.py --events results/price_quality/post_adjustment/post_adjustment_extreme_events.csv --actions data/input/nse_corporate_actions_2014_2026.csv --top 120
-      - name: Apply legacy 2022 adjustment proxy
-        run: python scripts/apply_verified_adjustments.py --prices data/raw/stage_a_prices.csv --actions data/input/verified_2022_corporate_actions.csv --out data/processed/adjusted/prices_adjusted_2022_proxy.csv
-      - name: Upload price-integrity artifact
+      - name: Run readiness gate
+        id: gap_gate
+        if: always()
+        run: |
+          python scripts/audit_price_gap_readiness.py \
+            --prices data/raw/stage_a_prices.csv \
+            --repair-report results/price_quality/bhavcopy_gap_repair.json \
+            --verified-no-trade data/input/verified_no_trade_dates.csv \
+            --price-quality-summary results/price_quality/price_quality_summary.json \
+            --post-adjustment-summary results/price_quality/post_adjustment/post_adjustment_summary.json \
+            --symbol-map data/input/verified_symbol_map.csv \
+            --report results/price_quality/price_gap_readiness.json
+      - name: Upload diagnostics even when blocked
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fluidq-price-integrity-${{github.run_id}}
+          name: fluidq-price-integrity-diagnostic-${{ github.run_id }}
           path: |
-            results/price_quality/
-            data/processed/adjusted/
+            data/raw/stage_a_prices.csv
             data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
             data/input/nse_corporate_actions_2014_2026.csv
-            data/input/nse_corporate_actions_2014_2026.csv.summary.json
+            data/input/verified_price_adjustment_actions.csv
+            data/processed/adjusted/prices_adjusted_split_bonus.csv
+            results/price_quality/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish gated price-integrity artifact
+        if: ${{ steps.gap_gate.outcome == 'success' && steps.apply_adjustments.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-integrity-${{ github.run_id }}
+          path: |
+            data/raw/stage_a_prices.csv
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/verified_symbol_map.csv
             data/input/verified_price_adjustment_actions.csv
             data/input/verified_manual_corporate_actions.csv
+            data/processed/adjusted/prices_adjusted_split_bonus.csv
+            results/price_quality/
+          if-no-files-found: error
           retention-days: 30
