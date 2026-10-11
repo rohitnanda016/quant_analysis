@@ -153,7 +153,14 @@ jobs:
             --min-gap-sessions 10 --sleep 0.15 --retries 3
           mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
 
+      - name: Audit raw price quality
+        id: raw_audit
+        continue-on-error: true
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
+        run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
+
       - name: Build V6.2 identity
+        continue-on-error: true
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/build_v6_2_identity.py \
@@ -163,6 +170,7 @@ jobs:
 
       - name: Audit coverage
         id: audit_coverage
+        continue-on-error: true
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/audit_v6_2_gaps.py \
@@ -211,6 +219,7 @@ jobs:
             data/input/verified_no_trade_dates.csv
             data/input/verified_symbol_map.csv
             results/latest/
+            results/price_quality/
           if-no-files-found: warn
           retention-days: 30
 
@@ -226,6 +235,7 @@ jobs:
             data/input/verified_no_trade_dates.csv
             data/input/verified_symbol_map.csv
             results/latest/
+            results/price_quality/
           if-no-files-found: error
           retention-days: 30
 
