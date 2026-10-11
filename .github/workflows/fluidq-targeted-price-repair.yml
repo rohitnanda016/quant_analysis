@@ -1,12 +1,21 @@
 name: FLUID-Q Targeted Price Gap Repair
 
 on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - "scripts/repair_price_gaps_bhavcopy.py"
+      - "scripts/audit_price_gap_readiness.py"
+      - "tests/test_price_gap_bhavcopy_parser.py"
   workflow_dispatch:
     inputs:
       base_run_id:
         description: "Finalized full-history workflow run whose raw data should be repaired"
         required: true
-        default: "36875371038"
+
+concurrency:
+  group: fluidq-price-gap-repair-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,6 +32,9 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Unit test legacy and UDiFF archive parsing
+        run: python -m unittest discover -s tests -p "test_price_gap_bhavcopy_parser.py"
 
       - name: Download finalized dataset
         uses: actions/download-artifact@v5
@@ -49,7 +61,7 @@ jobs:
             --no-trade-out data/input/verified_no_trade_dates.csv \
             --report results/price_quality/bhavcopy_gap_repair.json \
             --start 2014-01-01 --end 2026-08-31 \
-            --min-gap-sessions 10 --sleep 0.15 --retries 3
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500
           rc=$?
           if [ -s data/raw/stage_a_prices_repaired.csv ]; then
             mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
