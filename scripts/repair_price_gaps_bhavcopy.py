@@ -232,6 +232,7 @@ def main():
                 pass
             additions.append(new)
             existing.add((day, requested))
+            existing_raw_keys.add((day, exchange))
 
         if n % 50 == 0 or n == len(all_days):
             print(f"bhavcopy dates {n}/{len(all_days)}; fetched={fetched_days}; added={len(additions)}; verified_no_trade={len(no_trade)}; errors={len(fetch_errors)}", flush=True)
