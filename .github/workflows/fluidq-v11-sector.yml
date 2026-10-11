@@ -40,6 +40,8 @@ jobs:
               raise SystemExit("Refusing to backtest: price-gap readiness gate did not pass")
           if int(r.get("repair", {}).get("minimum_valid_bhavcopy_eq_rows", 0) or 0) < 500:
               raise SystemExit("Refusing to run: daily archive completeness threshold is missing/failed")
+          if "NSEArchives.bhavcopy_raw" not in str(r.get("repair", {}).get("archive_api", "")):
+              raise SystemExit("Refusing to run: readiness report predates the UDiFF-capable official archive adapter")
           print("Price-gap gate passed; result remains provisional.")
           PY
           mkdir -p data/processed/adjusted data/input results/backtest_v11
