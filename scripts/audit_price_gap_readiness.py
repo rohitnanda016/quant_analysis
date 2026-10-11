@@ -112,6 +112,7 @@ def main():
         + int(repair.get("already_present_alias_matches", 0))
     )
     unresolved_fetch_pairs = int(repair.get("unresolved_target_pairs_due_to_fetch_errors", -1))
+    archive_absence_pairs = int(repair.get("archive_absence_review_pairs", 0) or 0)
     min_bhavcopy_rows = int(repair.get("minimum_valid_bhavcopy_eq_rows", 0) or 0)
     archive_api = str(repair.get("archive_api", ""))
 
@@ -147,6 +148,8 @@ def main():
         gap_blockers.append(f"Repair accounting mismatch: target_pairs={target_pairs}, accounted={accounted}.")
     if unresolved_fetch_pairs > 0:
         gap_blockers.append(f"{unresolved_fetch_pairs} candidate symbol/date pair(s) remain unresolved due to fetch errors.")
+    if archive_absence_pairs > 0:
+        gap_blockers.append(f"{archive_absence_pairs} symbol/date pairs are absent from parsed EQ bhavcopies but lack independent evidence of an active listing or suspension; review them before any carry-forward.")
     if missing_unverified:
         gap_blockers.append(f"{len(missing_unverified)} missing pair(s) in long internal gaps are neither observed nor verified no-trade.")
 
@@ -185,6 +188,7 @@ def main():
             "archive_api": archive_api,
             "rows_added": repair.get("rows_added"),
             "verified_no_trade_pairs": repair.get("verified_no_trade_pairs"),
+            "archive_absence_review_pairs": archive_absence_pairs,
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
             "accounted_target_pairs": accounted,
         },
