@@ -42,7 +42,6 @@ jobs:
           mkdir -p data/input
           cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
           test -s data/input/verified_corporate_events.csv
       - name: Run walk-forward stability diagnostics
         run: |
