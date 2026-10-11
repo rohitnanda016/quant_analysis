@@ -110,6 +110,7 @@ def main():
     ap.add_argument("--min-gap-sessions", type=int, default=10)
     ap.add_argument("--sleep", type=float, default=0.15)
     ap.add_argument("--retries", type=int, default=3)
+    ap.add_argument("--min-bhavcopy-eq-rows", type=int, default=500, help="Reject partial/invalid archives rather than using them as no-trade evidence.")
     a = ap.parse_args()
 
     src = Path(a.prices)
@@ -184,6 +185,8 @@ def main():
             try:
                 payload = archive.bhavcopy_old_raw(pd.Timestamp(day).to_pydatetime())
                 parsed = parse_archive(payload, day)
+                if len(parsed) < a.min_bhavcopy_eq_rows:
+                    raise ValueError(f"Bhavcopy sanity check failed: only {len(parsed)} EQ rows; minimum is {a.min_bhavcopy_eq_rows}")
                 err = None
                 break
             except Exception as exc:
@@ -261,6 +264,7 @@ def main():
         "date_end": str(end.date()),
         "calendar_sessions": int(len(calendar)),
         "minimum_internal_gap_sessions_targeted": int(a.min_gap_sessions),
+        "minimum_valid_bhavcopy_eq_rows": int(a.min_bhavcopy_eq_rows),
         "internal_gap_spans_targeted": int(len(gap_spans)),
         "target_symbol_date_pairs": int(sum(len(x) for x in targets_by_date.values())),
         "unique_bhavcopy_dates_attempted": int(len(all_days)),
