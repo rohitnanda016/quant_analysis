@@ -121,6 +121,7 @@ def main():
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-trade-out", default="data/input/verified_no_trade_dates.csv")
+    ap.add_argument("--exceptions-out", default="data/input/unresolved_gap_exceptions.csv")
     ap.add_argument("--report", default="results/price_quality/bhavcopy_gap_repair.json")
     ap.add_argument("--start", default="2014-01-01")
     ap.add_argument("--end", default="2026-08-31")
@@ -188,7 +189,8 @@ def main():
     existing = set(zip(base["date"], base[detect_col]))
     existing_raw_keys = set(zip(base["date"], base["symbol"]))
     additions = []
-    no_trade = []
+    no_trade = []  # Only independently verified entries from an existing approved ledger.
+    absence_exceptions = []
     already_present_alias_matches = 0
     fetch_errors = []
     fetched_days = 0
@@ -246,13 +248,18 @@ def main():
                         continue
                     matched = parsed_by_symbol.get(exchange)
                     if matched is None or matched.empty:
-                        no_trade.append({
+                        # Absence from a complete bhavcopy does not, by itself,
+                        # prove a genuine no-trade day: the symbol may have been
+                        # renamed, suspended, delisted, or moved series. Keep it
+                        # unresolved until an authoritative status/lineage source
+                        # explains the absence. Never use it for return carry-forward.
+                        absence_exceptions.append({
                             "date": day.date().isoformat(),
                             "symbol": requested,
                             "exchange_symbol_checked": exchange,
                             "series": "EQ",
-                            "status": "verified_no_trade",
-                            "verification_source": "NSE daily bhavcopy EQ universe",
+                            "status": "unresolved_archive_absence",
+                            "verification_source": "NSE daily EQ bhavcopy has no matching ticker; listing/suspension status not independently verified",
                         })
                         continue
 
@@ -283,7 +290,7 @@ def main():
             if completed % 50 == 0 or completed == len(all_days):
                 print(
                     f"bhavcopy dates {completed}/{len(all_days)}; fetched={fetched_days}; "
-                    f"added={len(additions)}; verified_no_trade={len(no_trade)}; "
+                    f"added={len(additions)}; unresolved_absences={len(absence_exceptions)}; "
                     f"errors={len(fetch_errors)}",
                     flush=True,
                 )
@@ -296,14 +303,31 @@ def main():
     result = result.drop_duplicates(["date", "symbol", "series"] if "series" in result else ["date", "symbol"])
     result = result.sort_values(["date", "symbol"]).reset_index(drop=True)
 
-    no_trade_df = pd.DataFrame(no_trade, columns=[
-        "date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"
-    ])
+    nt_path = Path(a.no_trade_out)
+    nt_path.parent.mkdir(parents=True, exist_ok=True)
+    # Preserve only prior entries that have been explicitly reviewed outside
+    # this automatic gap scan. This code never creates verified_no_trade rows.
+    if nt_path.exists() and nt_path.stat().st_size:
+        approved = pd.read_csv(nt_path, low_memory=False)
+        required_approved = {"date", "symbol", "status"}
+        if not required_approved.issubset(approved.columns):
+            raise SystemExit(f"Existing verified no-trade ledger missing columns: {sorted(required_approved-set(approved.columns))}")
+        approved = approved.loc[approved["status"].eq("verified_no_trade")].copy()
+        no_trade_df = approved
+    else:
+        no_trade_df = pd.DataFrame(columns=[
+            "date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"
+        ])
     no_trade_df = no_trade_df.drop_duplicates(["date", "symbol"])
+    exception_df = pd.DataFrame(absence_exceptions, columns=[
+        "date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"
+    ]).drop_duplicates(["date", "symbol"])
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(out, index=False)
-    nt_path = Path(a.no_trade_out); nt_path.parent.mkdir(parents=True, exist_ok=True)
     no_trade_df.to_csv(nt_path, index=False)
+    exceptions_path = Path(a.exceptions_out)
+    exceptions_path.parent.mkdir(parents=True, exist_ok=True)
+    exception_df.to_csv(exceptions_path, index=False)
 
     report = {
         "source_input": str(src),
@@ -323,12 +347,14 @@ def main():
         "rows_added": int(len(additions)),
         "rows_after": int(len(result)),
         "verified_no_trade_pairs": int(len(no_trade_df)),
+        "archive_absence_review_pairs": int(len(exception_df)),
         "unresolved_target_pairs_due_to_fetch_errors": int(sum(x["target_symbols"] for x in fetch_errors)),
         "status": "BLOCKED" if fetch_errors else "PASS",
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
         "gaps": gap_spans,
         "fetch_errors": fetch_errors,
         "verified_no_trade_ledger": str(nt_path),
+        "unresolved_absence_exceptions": str(exceptions_path),
         "note": "Only actual NSE EQ bhavcopy observations are added. Gaps absent from a successfully parsed archive are recorded as verified no-trade, not converted into synthetic raw price rows. Failed archive days remain unresolved.",
     }
     rp = Path(a.report); rp.parent.mkdir(parents=True, exist_ok=True)
@@ -336,7 +362,7 @@ def main():
     print(json.dumps({k: report[k] for k in [
         "calendar_sessions", "internal_gap_spans_targeted", "target_symbol_date_pairs",
         "unique_bhavcopy_dates_attempted", "bhavcopy_dates_parsed", "fetch_error_dates",
-        "rows_before", "rows_added", "rows_after", "verified_no_trade_pairs",
+        "rows_before", "rows_added", "rows_after", "verified_no_trade_pairs", "archive_absence_review_pairs",
         "unresolved_target_pairs_due_to_fetch_errors"
     ]}, indent=2))
     # The separate readiness gate consumes this report after other diagnostics
