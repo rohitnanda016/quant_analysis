@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Unit test legacy and UDiFF archive parsing
+        run: python -m unittest discover -s tests -p "test_price_gap_bhavcopy_parser.py"
+
       - name: Validate run parameters
         env:
           STAGE: ${{ inputs.stage }}
@@ -150,7 +153,7 @@ jobs:
             --no-trade-out data/input/verified_no_trade_dates.csv \
             --report results/latest/bhavcopy_gap_repair.json \
             --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" \
-            --min-gap-sessions 10 --sleep 0.15 --retries 3
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500
           mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
 
       - name: Audit raw price quality
