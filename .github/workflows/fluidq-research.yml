@@ -162,6 +162,7 @@ jobs:
             --symbol-map data/input/verified_symbol_map.csv
 
       - name: Audit coverage
+        id: audit_coverage
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/audit_v6_2_gaps.py \
@@ -170,6 +171,7 @@ jobs:
             --outdir results/latest
 
       - name: Gate source gaps and publish an explicit readiness report
+        id: gap_gate
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/audit_price_gap_readiness.py \
@@ -197,7 +199,24 @@ jobs:
           START_DATE: ${{ inputs.start_date }}
           END_DATE: ${{ inputs.end_date }}
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload diagnostic artifact even when readiness is blocked
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-diagnostic-${{ inputs.stage }}-${{ github.run_id }}
+          path: |
+            data/raw/
+            data/processed/v6_2/
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/verified_symbol_map.csv
+            results/latest/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish research-input artifact only when source gate passes
+        if: ${{ (inputs.stage != 'stage-a' && inputs.stage != 'full-history' && inputs.stage != 'repair-full-history') || (steps.gap_gate.outcome == 'success' && steps.audit_coverage.outcome == 'success') }}
+        uses: actions/upload-artifact@v4
         with:
           name: fluidq-${{ inputs.stage }}-${{ github.run_id }}
           path: |
@@ -207,6 +226,7 @@ jobs:
             data/input/verified_no_trade_dates.csv
             data/input/verified_symbol_map.csv
             results/latest/
+          if-no-files-found: error
           retention-days: 30
 
       - name: Commit compact results
