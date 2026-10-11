@@ -113,6 +113,7 @@ def main():
     )
     unresolved_fetch_pairs = int(repair.get("unresolved_target_pairs_due_to_fetch_errors", -1))
     min_bhavcopy_rows = int(repair.get("minimum_valid_bhavcopy_eq_rows", 0) or 0)
+    archive_api = str(repair.get("archive_api", ""))
 
     post_summary = {}
     if args.post_adjustment_summary and Path(args.post_adjustment_summary).exists():
@@ -121,11 +122,27 @@ def main():
     if args.price_quality_summary and Path(args.price_quality_summary).exists():
         price_summary = json.loads(Path(args.price_quality_summary).read_text())
 
+    if not price_summary:
+        gap_blockers.append("Raw price-quality summary is missing; basic OHLC, duplicate and nonpositive-close checks have not passed.")
+    else:
+        basic_quality_fields = [
+            "missing_ohlc", "nonpositive_close", "ohlc_order_issues",
+            "negative_volume", "negative_turnover", "duplicate_date_symbol",
+        ]
+        invalid_quality = {
+            key: int(price_summary.get(key, 0) or 0)
+            for key in basic_quality_fields
+            if int(price_summary.get(key, 0) or 0) != 0
+        }
+        if invalid_quality:
+            gap_blockers.append(f"Basic raw price-quality checks failed: {invalid_quality}.")
     gap_blockers = []
     if fetch_errors != 0:
         gap_blockers.append(f"{fetch_errors} daily bhavcopy date(s) failed; failed downloads are not no-trade evidence.")
     if min_bhavcopy_rows < 500:
         gap_blockers.append("Daily archive sanity threshold is missing or below 500 EQ rows; artifact cannot be used as verified no-trade evidence.")
+    if "NSEArchives.bhavcopy_raw" not in archive_api:
+        gap_blockers.append("Repair report does not prove use of the UDiFF-capable NSEArchives.bhavcopy_raw adapter; re-run with current repair code.")
     if target_pairs >= 0 and accounted < target_pairs:
         gap_blockers.append(f"Repair accounting mismatch: target_pairs={target_pairs}, accounted={accounted}.")
     if unresolved_fetch_pairs > 0:
@@ -165,6 +182,7 @@ def main():
             "bhavcopy_dates_parsed": repair.get("bhavcopy_dates_parsed"),
             "fetch_error_dates": fetch_errors,
             "minimum_valid_bhavcopy_eq_rows": min_bhavcopy_rows,
+            "archive_api": archive_api,
             "rows_added": repair.get("rows_added"),
             "verified_no_trade_pairs": repair.get("verified_no_trade_pairs"),
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
