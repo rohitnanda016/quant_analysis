@@ -22,6 +22,9 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Unit test legacy and UDiFF archive parsing
+        run: python -m unittest discover -s tests -p "test_price_gap_bhavcopy_parser.py"
       - name: Download finalized dataset
         uses: actions/download-artifact@v5
         with:
