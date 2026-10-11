@@ -18,20 +18,22 @@ import pandas as pd
 from jugaad_data.nse import NSEArchives
 
 
+# Supports both legacy bhavcopy columns (OPEN_PRICE/CLOSE_PRICE/...) and
+# UDiFF columns (OpnPric/ClsPric/TckrSymb/SctySrs) returned by NSEArchives.
 PRICE_COLS = {
-    "symbol": ["SYMBOL", "symbol"],
-    "series": ["SERIES", "series"],
-    "date": ["TIMESTAMP", "DATE", "date"],
-    "prev_close": ["PREVCLOSE", "PREV_CLOSE", "prev_close"],
-    "open": ["OPEN", "open"],
-    "high": ["HIGH", "high"],
-    "low": ["LOW", "low"],
-    "last": ["LAST", "last"],
-    "close": ["CLOSE", "close"],
-    "vwap": ["VWAP", "vwap"],
-    "volume": ["TOTTRDQTY", "TOTTRDQTY", "TOTAL_TRADED_QUANTITY", "volume"],
-    "traded_value": ["TOTTRDVAL", "TOTTRDVAL", "TURNOVER", "traded_value"],
-    "num_trades": ["TOTALTRADES", "NO_OF_TRADES", "num_trades"],
+    "symbol": ["SYMBOL", "TCKRSYMB", "TICKER_SYMBOL"],
+    "series": ["SERIES", "SCTYSRS", "SECURITY_SERIES"],
+    "date": ["TIMESTAMP", "DATE", "DATE1", "TRADDT", "TRADING_DATE"],
+    "prev_close": ["PREVCLOSE", "PREV_CLOSE", "PRVSCLSGPRIC", "PREVIOUS_CLOSE"],
+    "open": ["OPEN", "OPEN_PRICE", "OPNPRIC"],
+    "high": ["HIGH", "HIGH_PRICE", "HGHP RIC".replace(" ", "")],
+    "low": ["LOW", "LOW_PRICE", "LWPRIC"],
+    "last": ["LAST", "LAST_PRICE", "LASTPRIC"],
+    "close": ["CLOSE", "CLOSE_PRICE", "CLSPRIC"],
+    "vwap": ["VWAP", "AVG_PRICE", "AVGP RIC".replace(" ", "")],
+    "volume": ["TOTTRDQTY", "TTL_TRD_QNTY", "TOTAL_TRADED_QUANTITY", "TTLTRADGVOL"],
+    "traded_value": ["TOTTRDVAL", "TURNOVER_LACS", "TURNOVER", "TTLTRFVAL", "TRADED_VALUE"],
+    "num_trades": ["TOTALTRADES", "NO_OF_TRADES", "TTLNBOFTXSEXCTD", "NUM_TRADES"],
 }
 
 
@@ -183,7 +185,7 @@ def main():
         err = None
         for attempt in range(a.retries + 1):
             try:
-                payload = archive.bhavcopy_old_raw(pd.Timestamp(day).to_pydatetime())
+                payload = archive.bhavcopy_raw(pd.Timestamp(day).to_pydatetime())
                 parsed = parse_archive(payload, day)
                 if len(parsed) < a.min_bhavcopy_eq_rows:
                     raise ValueError(f"Bhavcopy sanity check failed: only {len(parsed)} EQ rows; minimum is {a.min_bhavcopy_eq_rows}")
@@ -219,12 +221,14 @@ def main():
 
             row = matched.iloc[-1].to_dict()
             new = {col: pd.NA for col in base.columns}
-            for col in ["symbol", "series", "date", "prev_close", "open", "high", "low", "last", "close", "vwap", "volume", "num_trades"]:
+            for col in ["symbol", "series", "date", "prev_close", "open", "high", "low", "last", "close", "vwap", "volume", "traded_value", "turnover", "turnover_₹", "turnover ₹", "turnover_₹", "num_trades"]:
                 if col in new and col in row:
                     new[col] = row[col]
             # Preserve provenance fields that exist in this dataset.
             if "turnover ₹" in new and "traded_value" in row:
                 new["turnover ₹"] = row["traded_value"]
+            if "turnover_₹" in new and "traded_value" in row:
+                new["turnover_₹"] = row["traded_value"]
             if "requested_symbol" in new:
                 new["requested_symbol"] = requested
             if "source_symbol" in new:
