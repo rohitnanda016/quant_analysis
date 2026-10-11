@@ -5,6 +5,7 @@ on:
     branches: [v1.2-factor-attribution]
     paths:
       - "scripts/repair_ibhistorical_gap.py"
+      - "scripts/download_stage_a.py"
       - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
