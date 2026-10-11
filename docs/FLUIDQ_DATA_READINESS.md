@@ -28,7 +28,7 @@
 
 ### Gate A — source completeness
 - No failed bhavcopy dates in the repair report.
-- Every targeted long-gap pair is either backed by a raw NSE EQ observation, confirmed absent from a successfully parsed official daily EQ archive, or explicitly recorded as an unresolved exception.
+- Every targeted long-gap pair must be backed by a raw NSE EQ observation or an independently evidenced, explicitly approved no-trade/suspension case. A bhavcopy absence alone stays unresolved and blocks the gate.
 - No row is fabricated, and the raw `EQ` series remains separate from E1/other series.
 - The strict missing-held-return check remains enabled.
 
@@ -60,7 +60,7 @@
 1. Use **FLUID-Q Targeted Price Gap Repair** on branch `v1.2-factor-attribution` with base run ID `36875371038` (the source artifact `fluidq-finalized-full-history-36875371038`). The workflow now runs a parser preflight for legacy and UDiFF schemas before downloading the 254 MB dataset.
 2. The repair calls `NSEArchives.bhavcopy_raw`, which selects the legacy archive for historical dates and supports UDiFF-era files from 8 July 2024. The row parser normalizes the two schemas and converts legacy `TURNOVER_LACS` into rupees before writing the raw series. The source response must include at least 500 EQ observations before absence of a symbol is treated as no-trade evidence.
 3. The broad scan has an initial inventory of 2,892 archive dates and 42,741 candidate symbol/date pairs. It processes at most three source sessions concurrently and logs every 50 dates. This is source verification, not a job that should be judged by the old targeted repair's one-symbol windows.
-4. Inspect `results/price_quality/price_gap_readiness.json` in the run artifact. Use the artifact as an exploratory **price-return** input only if `status=PASS_PRICE_GAPS`. The gate also requires basic raw-price quality and current archive-adapter provenance. If blocked, use the diagnostic artifact, not the research-input artifact.
+4. Inspect `results/price_quality/price_gap_readiness.json` and `data/input/unresolved_gap_exceptions.csv` in the run artifact. Use the artifact as an exploratory **price-return** input only if `status=PASS_PRICE_GAPS` and all missing pairs have an observation or independent evidence. The gate also requires basic raw-price quality and current archive-adapter provenance. If blocked, use the diagnostic artifact, not the research-input artifact.
 5. Research workflows are manual-only and require the explicit run ID of the gated artifact. Old queued runs that were created before this change may still be running against a fixed historic price-integrity artifact; their output is stale/unqualified even if a job says success. Do not use those outputs for factor selection or reports.
 
 ## Remaining release work after source-gap repair
