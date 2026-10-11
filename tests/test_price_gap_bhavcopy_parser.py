@@ -23,6 +23,7 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertAlmostEqual(float(row["open"]), 500.0)
         self.assertAlmostEqual(float(row["prev_close"]), 498.55)
         self.assertAlmostEqual(float(row["volume"]), 12345.0)
+        self.assertAlmostEqual(float(row["traded_value"]), 6170000.0)
 
     def test_udiff_archive_columns(self):
         csv = (
@@ -42,6 +43,7 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertAlmostEqual(float(row["open"]), 410.0)
         self.assertAlmostEqual(float(row["prev_close"]), 409.0)
         self.assertAlmostEqual(float(row["volume"]), 12345.0)
+        self.assertAlmostEqual(float(row["traded_value"]), 5100000.0)
 
     def test_rejects_archive_missing_identity_or_close(self):
         csv = "FOO,BAR\nx,y\n"
