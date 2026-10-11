@@ -193,6 +193,11 @@ def main():
     already_present_alias_matches = 0
     fetch_errors = []
     fetched_days = 0
+    # Diagnostics distinguish a true symbol-level absence from a partial or
+    # incorrectly parsed daily archive. These observations never approve a gap.
+    benchmark_symbols = ("RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "AARTIIND")
+    benchmark_presence_counts = {symbol: {"dates_checked": 0, "present": 0, "absent": 0} for symbol in benchmark_symbols}
+    archive_diagnostic_examples = []
     all_days = sorted(d for d in targets_by_date if start <= d <= end)
 
     def fetch_day(day):
@@ -237,7 +242,25 @@ def main():
                 })
             else:
                 fetched_days += 1
-                parsed_by_symbol = {s: g for s, g in parsed.groupby("symbol", sort=False)}
+                parsed_by_symbol = {str(s).strip().upper(): g for s, g in parsed.groupby("symbol", sort=False)}
+                parsed_symbols = set(parsed_by_symbol)
+                for benchmark in benchmark_symbols:
+                    benchmark_presence_counts[benchmark]["dates_checked"] += 1
+                    bucket = "present" if benchmark in parsed_symbols else "absent"
+                    benchmark_presence_counts[benchmark][bucket] += 1
+                missing_benchmarks = [s for s in benchmark_symbols if s not in parsed_symbols]
+                # Keep only high-signal examples to avoid bloating the report.
+                if len(archive_diagnostic_examples) < 100 and (missing_benchmarks or "AARTIIND" in target_symbols):
+                    archive_diagnostic_examples.append({
+                        "date": day.date().isoformat(),
+                        "parsed_eq_rows": int(len(parsed)),
+                        "parsed_unique_symbols": int(len(parsed_symbols)),
+                        "target_symbols_count": int(len(target_symbols)),
+                        "target_symbols_missing_sample": [s for s in sorted(target_symbols) if s not in parsed_symbols][:12],
+                        "benchmark_symbols_missing": missing_benchmarks,
+                        "aartiind_is_target": "AARTIIND" in target_symbols,
+                        "aartiind_present": "AARTIIND" in parsed_symbols,
+                    })
                 for requested in sorted(target_symbols):
                     if (day, requested) in existing:
                         continue
@@ -379,6 +402,11 @@ def main():
         "accounted_target_pairs": int(len(additions) + verified_target_no_trade_pairs + already_present_alias_matches + len(exception_df) + sum(x["target_symbols"] for x in fetch_errors)),
         "status": "BLOCKED" if fetch_errors or len(exception_df) else "PASS",
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
+        "archive_symbol_presence_diagnostics": {
+            "benchmark_presence_counts": benchmark_presence_counts,
+            "examples": archive_diagnostic_examples,
+            "interpretation": "Presence counts diagnose archive parsing/matching only; they do not independently verify any missing symbol/date as no-trade or authorize carry-forward.",
+        },
         "gaps": gap_spans,
         "fetch_errors": fetch_errors,
         "verified_no_trade_ledger": str(nt_path),
