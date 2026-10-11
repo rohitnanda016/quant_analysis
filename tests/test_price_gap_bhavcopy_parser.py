@@ -4,6 +4,7 @@ from datetime import date
 import pandas as pd
 
 from scripts.repair_price_gaps_bhavcopy import parse_archive
+from scripts.audit_price_gap_readiness import accounting_summary
 
 
 class ParseBhavcopyTests(unittest.TestCase):
@@ -44,6 +45,18 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertAlmostEqual(float(row["prev_close"]), 409.0)
         self.assertAlmostEqual(float(row["volume"]), 12345.0)
         self.assertAlmostEqual(float(row["traded_value"]), 5100000.0)
+
+    def test_accounting_includes_unresolved_pairs_without_approving_them(self):
+        result = accounting_summary(100, 20, 0, 5, 70, 5)
+        self.assertEqual(result["accounted"], 100)
+        self.assertFalse(result["mismatch"])
+        self.assertEqual(result["buckets"]["unresolved_archive_absence"], 70)
+        self.assertEqual(result["buckets"]["unresolved_fetch_error"], 5)
+
+    def test_accounting_detects_double_count_or_missing_pairs(self):
+        result = accounting_summary(100, 20, 0, 5, 69, 5)
+        self.assertTrue(result["mismatch"])
+        self.assertEqual(result["accounted"], 99)
 
     def test_rejects_archive_missing_identity_or_close(self):
         csv = "FOO,BAR\nx,y\n"
