@@ -62,7 +62,6 @@ jobs:
           mkdir -p data/input
           cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
       - name: Run robustness variant
         run: |
           python scripts/run_fluidq_robustness.py \
