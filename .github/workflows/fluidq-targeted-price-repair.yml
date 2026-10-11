@@ -1,18 +1,6 @@
 name: FLUID-Q Targeted Price Gap Repair
 
 on:
-  push:
-    branches: [v1.2-factor-attribution]
-    paths:
-      - "scripts/repair_price_gaps_bhavcopy.py"
-      - "scripts/audit_price_gap_readiness.py"
-      - "scripts/download_stage_a.py"
-      - "scripts/fetch_nse_corporate_actions.py"
-      - "scripts/build_price_adjustment_actions.py"
-      - "scripts/apply_verified_adjustments.py"
-      - "scripts/audit_price_quality.py"
-      - "scripts/audit_post_adjustment.py"
-      - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
       base_run_id:
