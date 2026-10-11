@@ -45,7 +45,6 @@ jobs:
           mkdir -p data/input
           cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
       - name: Run factor diagnostics
         run: |
           python scripts/run_fluidq_factor_diagnostics.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --outdir results/factor_diagnostics
