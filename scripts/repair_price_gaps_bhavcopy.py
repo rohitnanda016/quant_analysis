@@ -2,10 +2,9 @@
 """Backfill long internal NSE price gaps from official daily bhavcopy archives.
 
 Only exact EQ observations from an official archive are inserted. A symbol/date
-pair absent from a successfully parsed archive is written to a separate
-verified-no-trade ledger; it is never written as a synthetic raw price.
-Failed archive downloads are recorded as unresolved and are not treated as
-no-trade evidence.
+pair absent from a successfully parsed archive is recorded as unresolved until
+independent listing/suspension evidence is supplied. It is never written as a
+synthetic raw price or automatically approved as a no-trade day.
 """
 import argparse
 import io
@@ -375,15 +374,17 @@ def main():
         "verified_no_trade_pairs": verified_target_no_trade_pairs,
         "approved_ledger_rows_total": int(len(no_trade_df)),
         "archive_absence_review_pairs": int(len(exception_df)),
+        "already_present_alias_matches": int(already_present_alias_matches),
         "unresolved_target_pairs_due_to_fetch_errors": int(sum(x["target_symbols"] for x in fetch_errors)),
-        "status": "BLOCKED" if fetch_errors else "PASS",
+        "accounted_target_pairs": int(len(additions) + verified_target_no_trade_pairs + already_present_alias_matches + len(exception_df) + sum(x["target_symbols"] for x in fetch_errors)),
+        "status": "BLOCKED" if fetch_errors or len(exception_df) else "PASS",
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
         "gaps": gap_spans,
         "fetch_errors": fetch_errors,
         "verified_no_trade_ledger": str(nt_path),
         "unresolved_absence_exceptions": str(exceptions_path),
         "approved_no_trade_evidence_fields": ["verification_source", "evidence_reference"],
-        "note": "Only actual NSE EQ bhavcopy observations are added. Gaps absent from a successfully parsed archive are recorded as verified no-trade, not converted into synthetic raw price rows. Failed archive days remain unresolved.",
+        "note": "Only actual NSE EQ bhavcopy observations are added. Absence from a successfully parsed archive remains unresolved pending independent evidence; it is not verified no-trade and is never converted into a synthetic raw price row. Failed archive days also remain unresolved.",
     }
     rp = Path(a.report); rp.parent.mkdir(parents=True, exist_ok=True)
     rp.write_text(json.dumps(report, indent=2, default=str))
