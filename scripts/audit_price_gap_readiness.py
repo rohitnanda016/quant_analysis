@@ -20,6 +20,7 @@ def main():
     ap.add_argument("--price-quality-summary", default="")
     ap.add_argument("--report", required=True)
     ap.add_argument("--min-gap-sessions", type=int, default=10)
+    ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
     args = ap.parse_args()
 
     p = pd.read_csv(args.prices, usecols=lambda c: c in {
@@ -46,6 +47,34 @@ def main():
     nt = nt[nt["status"].eq("verified_no_trade")].dropna(subset=["date", "symbol"])
     no_trade = set(zip(nt["date"], nt["symbol"]))
 
+    aliases = {}
+    alias_path = Path(args.symbol_map)
+    if alias_path.exists():
+        amap = pd.read_csv(alias_path)
+        for z in amap.itertuples():
+            old = str(getattr(z, "old_symbol", "")).strip().upper()
+            new = str(getattr(z, "new_symbol", "")).strip().upper()
+            if old and new and old != "NAN" and new != "NAN":
+                aliases[old] = new
+                aliases[new] = new
+    def terminal_alias(value):
+        value = str(value).strip().upper()
+        seen = set()
+        while value in aliases and value not in seen:
+            seen.add(value)
+            nxt = aliases[value]
+            if nxt == value:
+                break
+            value = nxt
+        return value
+
+    # Existing rows can arrive under the post-rename ticker even when the
+    # acquisition/request symbol in the missing-gap audit is historical.
+    observed_canonical_pairs = set(zip(
+        p["date"],
+        p["symbol"].map(terminal_alias)
+    ))
+
     missing_unverified = []
     long_gap_spans = []
     for symbol, group in p.groupby(source_symbol, sort=False):
@@ -62,7 +91,8 @@ def main():
             })
             for i in range(left + 1, right):
                 dd = pd.Timestamp(calendar[i])
-                if (dd, str(symbol)) not in no_trade:
+                resolved_alias = (dd, terminal_alias(symbol)) in observed_canonical_pairs
+                if (dd, str(symbol)) not in no_trade and not resolved_alias:
                     missing_unverified.append({
                         "date": dd.date().isoformat(),
                         "symbol": str(symbol),
