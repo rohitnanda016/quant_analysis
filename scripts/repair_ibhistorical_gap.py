@@ -4,9 +4,12 @@ import pandas as pd
 from download_stage_a import get_chunk
 
 p=argparse.ArgumentParser(description="Repair verified held-symbol price gaps from NSE daily history.")
-p.add_argument("--prices", required=True)
-p.add_argument("--out", required=True)
+p.add_argument("--prices", default="data/raw/stage_a_prices.csv", help="Existing raw price CSV")
+p.add_argument("--out", default="data/raw/stage_a_prices_repaired.csv", help="Output repaired price CSV")
 p.add_argument("--sleep", type=float, default=1.0)
+# Backward-compatible no-op date flags: older workflow revisions passed these.
+p.add_argument("--start", help="Legacy compatibility flag; repair windows are explicitly defined below")
+p.add_argument("--end", help="Legacy compatibility flag; repair windows are explicitly defined below")
 a=p.parse_args()
 
 base=pd.read_csv(a.prices, low_memory=False)
