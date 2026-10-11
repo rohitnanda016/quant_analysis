@@ -11,6 +11,19 @@ from pathlib import Path
 import pandas as pd
 
 
+def accounting_summary(target_pairs, rows_added, verified_no_trade_pairs, alias_matches, archive_absence_pairs, fetch_error_pairs):
+    """Count each targeted pair in exactly one reported disposition bucket."""
+    buckets = {
+        "observed_added": int(rows_added),
+        "verified_no_trade": int(verified_no_trade_pairs),
+        "already_present_alias": int(alias_matches),
+        "unresolved_archive_absence": int(archive_absence_pairs),
+        "unresolved_fetch_error": int(fetch_error_pairs),
+    }
+    return {"buckets": buckets, "accounted": sum(buckets.values()), "target_pairs": int(target_pairs),
+            "mismatch": sum(buckets.values()) != int(target_pairs)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
@@ -126,13 +139,17 @@ def main():
     repair = json.loads(repair_path.read_text())
     fetch_errors = int(repair.get("fetch_error_dates", -1))
     target_pairs = int(repair.get("target_symbol_date_pairs", -1))
-    accounted = (
-        int(repair.get("rows_added", 0))
-        + int(repair.get("verified_no_trade_pairs", 0))
-        + int(repair.get("already_present_alias_matches", 0))
-    )
     unresolved_fetch_pairs = int(repair.get("unresolved_target_pairs_due_to_fetch_errors", -1))
     archive_absence_pairs = int(repair.get("archive_absence_review_pairs", 0) or 0)
+    accounting = accounting_summary(
+        target_pairs,
+        repair.get("rows_added", 0),
+        repair.get("verified_no_trade_pairs", 0),
+        repair.get("already_present_alias_matches", 0) or 0,
+        archive_absence_pairs,
+        max(0, unresolved_fetch_pairs),
+    )
+    accounted = accounting["accounted"]
     min_bhavcopy_rows = int(repair.get("minimum_valid_bhavcopy_eq_rows", 0) or 0)
     archive_api = str(repair.get("archive_api", ""))
 
@@ -143,6 +160,7 @@ def main():
     if args.price_quality_summary and Path(args.price_quality_summary).exists():
         price_summary = json.loads(Path(args.price_quality_summary).read_text())
 
+    gap_blockers = []
     if not price_summary:
         gap_blockers.append("Raw price-quality summary is missing; basic OHLC, duplicate and nonpositive-close checks have not passed.")
     else:
@@ -157,7 +175,6 @@ def main():
         }
         if invalid_quality:
             gap_blockers.append(f"Basic raw price-quality checks failed: {invalid_quality}.")
-    gap_blockers = []
     gap_blockers.extend(ledger_evidence_issues)
     if fetch_errors != 0:
         gap_blockers.append(f"{fetch_errors} daily bhavcopy date(s) failed; failed downloads are not no-trade evidence.")
@@ -212,6 +229,8 @@ def main():
             "archive_absence_review_pairs": archive_absence_pairs,
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
             "accounted_target_pairs": accounted,
+            "accounting_buckets": accounting["buckets"],
+            "accounting_mismatch": accounting["mismatch"],
         },
         "approved_no_trade_ledger_evidence_issues": ledger_evidence_issues,
         "remaining_long_internal_gap_spans": int(len(long_gap_spans)),
