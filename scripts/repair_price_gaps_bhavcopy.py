@@ -50,7 +50,7 @@ def norm(value):
     return " ".join(str(value).replace("\ufeff", "").replace("\xa0", " ").strip().strip('"').split()).upper()
 
 
-def parse_archive(payload, day):
+def parse_archive(payload, day, filter_eq=True):
     if isinstance(payload, pd.DataFrame):
         frame = payload.copy()
     elif isinstance(payload, bytes):
@@ -82,7 +82,8 @@ def parse_archive(payload, day):
 
     frame["symbol"] = frame["symbol"].astype(str).str.strip().str.upper()
     frame["series"] = frame["series"].astype(str).str.strip().str.upper()
-    frame = frame.loc[frame["series"].eq("EQ")].copy()
+    if filter_eq:
+        frame = frame.loc[frame["series"].eq("EQ")].copy()
     frame["date"] = pd.Timestamp(day)
     for col in ["open", "high", "low", "last", "prev_close", "close", "vwap", "volume", "traded_value", "num_trades"]:
         if col in frame:
@@ -198,6 +199,8 @@ def main():
     benchmark_symbols = ("RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "AARTIIND")
     benchmark_presence_counts = {symbol: {"dates_checked": 0, "present": 0, "absent": 0} for symbol in benchmark_symbols}
     archive_diagnostic_examples = []
+    non_eq_target_presence_counts = defaultdict(lambda: defaultdict(int))
+    non_eq_target_presence_examples = []
     all_days = sorted(d for d in targets_by_date if start <= d <= end)
 
     def fetch_day(day):
@@ -206,7 +209,8 @@ def main():
         for attempt in range(a.retries + 1):
             try:
                 payload = thread_archive().bhavcopy_raw(pd.Timestamp(day).to_pydatetime())
-                parsed = parse_archive(payload, day)
+                parsed_all = parse_archive(payload, day, filter_eq=False)
+                parsed = parsed_all.loc[parsed_all["series"].eq("EQ")].copy()
                 if len(parsed) < a.min_bhavcopy_eq_rows:
                     raise ValueError(
                         f"Bhavcopy sanity check failed: only {len(parsed)} EQ rows; "
@@ -219,8 +223,8 @@ def main():
                 time.sleep(min(2 ** attempt, 15))
         time.sleep(a.sleep)
         if last_error is not None:
-            return pd.Timestamp(day), None, last_error
-        return pd.Timestamp(day), parsed, None
+            return pd.Timestamp(day), None, None, last_error
+        return pd.Timestamp(day), parsed, parsed_all, None
 
     completed = 0
     with ThreadPoolExecutor(max_workers=max(1, min(a.workers, 6))) as pool:
@@ -229,9 +233,10 @@ def main():
             day = pd.Timestamp(futures[future])
             target_symbols = targets_by_date[day]
             try:
-                _, parsed, err = future.result()
+                _, parsed, parsed_all, err = future.result()
             except Exception as exc:
                 parsed = None
+                parsed_all = None
                 err = f"{type(exc).__name__}: {str(exc)[:220]}"
 
             if err is not None or parsed is None:
@@ -244,6 +249,7 @@ def main():
                 fetched_days += 1
                 parsed_by_symbol = {str(s).strip().upper(): g for s, g in parsed.groupby("symbol", sort=False)}
                 parsed_symbols = set(parsed_by_symbol)
+                all_series_by_symbol = {str(s).strip().upper(): g for s, g in parsed_all.groupby("symbol", sort=False)}
                 for benchmark in benchmark_symbols:
                     benchmark_presence_counts[benchmark]["dates_checked"] += 1
                     bucket = "present" if benchmark in parsed_symbols else "absent"
@@ -270,6 +276,21 @@ def main():
                         continue
                     matched = parsed_by_symbol.get(exchange)
                     if matched is None or matched.empty:
+                        # Record whether the ticker exists in the archive under a non-EQ series.
+                        # This helps distinguish a series transition from a missing ticker.
+                        all_series_rows = all_series_by_symbol.get(exchange)
+                        other_series = [] if all_series_rows is None else sorted({
+                            str(x).strip().upper() for x in all_series_rows["series"].dropna()
+                            if str(x).strip().upper() != "EQ"
+                        })
+                        if other_series:
+                            for series_name in other_series:
+                                non_eq_target_presence_counts[requested][series_name] += 1
+                            if len(non_eq_target_presence_examples) < 100:
+                                non_eq_target_presence_examples.append({
+                                    "date": day.date().isoformat(), "symbol": requested,
+                                    "exchange_symbol_checked": exchange, "non_eq_series": other_series,
+                                })
                         # Absence from a complete bhavcopy does not, by itself,
                         # prove a genuine no-trade day: the symbol may have been
                         # renamed, suspended, delisted, or moved series. Keep it
@@ -405,7 +426,12 @@ def main():
         "archive_symbol_presence_diagnostics": {
             "benchmark_presence_counts": benchmark_presence_counts,
             "examples": archive_diagnostic_examples,
-            "interpretation": "Presence counts diagnose archive parsing/matching only; they do not independently verify any missing symbol/date as no-trade or authorize carry-forward.",
+            "unresolved_targets_found_in_non_eq_series": {
+                symbol: dict(series_counts)
+                for symbol, series_counts in sorted(non_eq_target_presence_counts.items())
+            },
+            "non_eq_series_examples": non_eq_target_presence_examples,
+            "interpretation": "Presence counts diagnose archive parsing/matching only; non-EQ rows are not treated as valid EQ prices and no absence is approved as no-trade.",
         },
         "gaps": gap_spans,
         "fetch_errors": fetch_errors,
