@@ -6,6 +6,7 @@ on:
     paths:
       - "scripts/repair_ibhistorical_gap.py"
       - "scripts/download_stage_a.py"
+      - "scripts/gate_held_symbol_price_gaps.py"
       - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
