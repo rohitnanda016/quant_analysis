@@ -61,7 +61,6 @@ jobs:
           mkdir -p data/input
           cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
-          cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
       - name: Run compression backtest
         run: |
           python scripts/run_fluidq_backtest.py             --prices data/processed/adjusted/prices_adjusted_split_bonus.csv             --membership data/input/nifty500_membership.csv             --events data/input/verified_corporate_events.csv             --factor-weights "${{matrix.weights}}"             --outdir "results/factor_compression/${{matrix.name}}"
