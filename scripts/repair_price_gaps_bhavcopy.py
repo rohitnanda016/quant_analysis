@@ -11,11 +11,21 @@ import argparse
 import io
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
 from jugaad_data.nse import NSEArchives
+
+_THREAD_LOCAL = threading.local()
+
+
+def thread_archive():
+    if not hasattr(_THREAD_LOCAL, "archive"):
+        _THREAD_LOCAL.archive = NSEArchives()
+    return _THREAD_LOCAL.archive
 
 
 # Supports both legacy bhavcopy columns (OPEN_PRICE/CLOSE_PRICE/...) and
@@ -112,6 +122,7 @@ def main():
     ap.add_argument("--min-gap-sessions", type=int, default=10)
     ap.add_argument("--sleep", type=float, default=0.15)
     ap.add_argument("--retries", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=3, help="Concurrent source sessions; keep modest to avoid excessive exchange requests.")
     ap.add_argument("--min-bhavcopy-eq-rows", type=int, default=500, help="Reject partial/invalid archives rather than using them as no-trade evidence.")
     a = ap.parse_args()
 
@@ -171,7 +182,6 @@ def main():
     # symbol. Do not replace existing raw prices automatically.
     existing = set(zip(base["date"], base[detect_col]))
     existing_raw_keys = set(zip(base["date"], base["symbol"]))
-    archive = NSEArchives()
     additions = []
     no_trade = []
     already_present_alias_matches = 0
@@ -179,71 +189,99 @@ def main():
     fetched_days = 0
     all_days = sorted(d for d in targets_by_date if start <= d <= end)
 
-    for n, day in enumerate(all_days, start=1):
-        target_symbols = targets_by_date[day]
-        payload = None
-        err = None
+    def fetch_day(day):
+        last_error = None
+        parsed = None
         for attempt in range(a.retries + 1):
             try:
-                payload = archive.bhavcopy_raw(pd.Timestamp(day).to_pydatetime())
+                payload = thread_archive().bhavcopy_raw(pd.Timestamp(day).to_pydatetime())
                 parsed = parse_archive(payload, day)
                 if len(parsed) < a.min_bhavcopy_eq_rows:
-                    raise ValueError(f"Bhavcopy sanity check failed: only {len(parsed)} EQ rows; minimum is {a.min_bhavcopy_eq_rows}")
-                err = None
+                    raise ValueError(
+                        f"Bhavcopy sanity check failed: only {len(parsed)} EQ rows; "
+                        f"minimum is {a.min_bhavcopy_eq_rows}"
+                    )
+                last_error = None
                 break
             except Exception as exc:
-                err = f"{type(exc).__name__}: {str(exc)[:220]}"
+                last_error = f"{type(exc).__name__}: {str(exc)[:220]}"
                 time.sleep(min(2 ** attempt, 15))
-        if err is not None:
-            fetch_errors.append({"date": day.date().isoformat(), "error": err, "target_symbols": len(target_symbols)})
-            continue
-
-        fetched_days += 1
-        parsed_by_symbol = {s: g for s, g in parsed.groupby("symbol", sort=False)}
-        for requested in sorted(target_symbols):
-            if (day, requested) in existing:
-                continue
-            exchange = exchange_symbol(requested, day, rename_rows)
-            if (day, exchange) in existing_raw_keys:
-                already_present_alias_matches += 1
-                continue
-            matched = parsed_by_symbol.get(exchange)
-            if matched is None or matched.empty:
-                no_trade.append({
-                    "date": day.date().isoformat(),
-                    "symbol": requested,
-                    "exchange_symbol_checked": exchange,
-                    "series": "EQ",
-                    "status": "verified_no_trade",
-                    "verification_source": "NSE daily bhavcopy EQ universe",
-                })
-                continue
-
-            row = matched.iloc[-1].to_dict()
-            new = {col: pd.NA for col in base.columns}
-            for col in ["symbol", "series", "date", "prev_close", "open", "high", "low", "last", "close", "vwap", "volume", "traded_value", "turnover", "turnover_₹", "turnover ₹", "turnover_₹", "num_trades"]:
-                if col in new and col in row:
-                    new[col] = row[col]
-            # Preserve provenance fields that exist in this dataset.
-            if "turnover ₹" in new and "traded_value" in row:
-                new["turnover ₹"] = row["traded_value"]
-            if "turnover_₹" in new and "traded_value" in row:
-                new["turnover_₹"] = row["traded_value"]
-            if "requested_symbol" in new:
-                new["requested_symbol"] = requested
-            if "source_symbol" in new:
-                new["source_symbol"] = exchange
-            if "source_endpoint" in new:
-                new["source_endpoint"] = "NSE daily bhavcopy archive"
-            if "repair_source" not in new:
-                pass
-            additions.append(new)
-            existing.add((day, requested))
-            existing_raw_keys.add((day, exchange))
-
-        if n % 50 == 0 or n == len(all_days):
-            print(f"bhavcopy dates {n}/{len(all_days)}; fetched={fetched_days}; added={len(additions)}; verified_no_trade={len(no_trade)}; errors={len(fetch_errors)}", flush=True)
         time.sleep(a.sleep)
+        if last_error is not None:
+            return pd.Timestamp(day), None, last_error
+        return pd.Timestamp(day), parsed, None
+
+    completed = 0
+    with ThreadPoolExecutor(max_workers=max(1, min(a.workers, 6))) as pool:
+        futures = {pool.submit(fetch_day, day): day for day in all_days}
+        for future in as_completed(futures):
+            day = pd.Timestamp(futures[future])
+            target_symbols = targets_by_date[day]
+            try:
+                _, parsed, err = future.result()
+            except Exception as exc:
+                parsed = None
+                err = f"{type(exc).__name__}: {str(exc)[:220]}"
+
+            if err is not None or parsed is None:
+                fetch_errors.append({
+                    "date": day.date().isoformat(),
+                    "error": str(err or "empty_archive"),
+                    "target_symbols": len(target_symbols),
+                })
+            else:
+                fetched_days += 1
+                parsed_by_symbol = {s: g for s, g in parsed.groupby("symbol", sort=False)}
+                for requested in sorted(target_symbols):
+                    if (day, requested) in existing:
+                        continue
+                    exchange = exchange_symbol(requested, day, rename_rows)
+                    if (day, exchange) in existing_raw_keys:
+                        already_present_alias_matches += 1
+                        continue
+                    matched = parsed_by_symbol.get(exchange)
+                    if matched is None or matched.empty:
+                        no_trade.append({
+                            "date": day.date().isoformat(),
+                            "symbol": requested,
+                            "exchange_symbol_checked": exchange,
+                            "series": "EQ",
+                            "status": "verified_no_trade",
+                            "verification_source": "NSE daily bhavcopy EQ universe",
+                        })
+                        continue
+
+                    row = matched.iloc[-1].to_dict()
+                    new = {col: pd.NA for col in base.columns}
+                    for col in [
+                        "symbol", "series", "date", "prev_close", "open", "high",
+                        "low", "last", "close", "vwap", "volume", "traded_value",
+                        "turnover", "turnover_₹", "turnover ₹", "num_trades",
+                    ]:
+                        if col in new and col in row:
+                            new[col] = row[col]
+                    if "turnover ₹" in new and "traded_value" in row:
+                        new["turnover ₹"] = row["traded_value"]
+                    if "turnover_₹" in new and "traded_value" in row:
+                        new["turnover_₹"] = row["traded_value"]
+                    if "requested_symbol" in new:
+                        new["requested_symbol"] = requested
+                    if "source_symbol" in new:
+                        new["source_symbol"] = exchange
+                    if "source_endpoint" in new:
+                        new["source_endpoint"] = "NSE daily bhavcopy archive"
+                    additions.append(new)
+                    existing.add((day, requested))
+                    existing_raw_keys.add((day, exchange))
+
+            completed += 1
+            if completed % 50 == 0 or completed == len(all_days):
+                print(
+                    f"bhavcopy dates {completed}/{len(all_days)}; fetched={fetched_days}; "
+                    f"added={len(additions)}; verified_no_trade={len(no_trade)}; "
+                    f"errors={len(fetch_errors)}",
+                    flush=True,
+                )
 
     # Keep raw rows as downloaded; no-trade marks are stored separately and
     # may only be used by the backtest to carry forward a mark, never as prices.
@@ -269,6 +307,7 @@ def main():
         "calendar_sessions": int(len(calendar)),
         "minimum_internal_gap_sessions_targeted": int(a.min_gap_sessions),
         "minimum_valid_bhavcopy_eq_rows": int(a.min_bhavcopy_eq_rows),
+        "workers": int(max(1, min(a.workers, 6))),
         "internal_gap_spans_targeted": int(len(gap_spans)),
         "target_symbol_date_pairs": int(sum(len(x) for x in targets_by_date.values())),
         "unique_bhavcopy_dates_attempted": int(len(all_days)),
