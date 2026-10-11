@@ -113,20 +113,22 @@ def main():
     a = ap.parse_args()
 
     src = Path(a.prices)
-    base = pd.read_csv(src, low_memory=False)
-    if not {"date", "symbol"}.issubset(base.columns):
+    raw_all = pd.read_csv(src, low_memory=False)
+    if not {"date", "symbol"}.issubset(raw_all.columns):
         raise SystemExit("Price file must contain date and symbol columns")
-    base["date"] = pd.to_datetime(base["date"], errors="coerce")
-    base["symbol"] = base["symbol"].astype(str).str.strip().str.upper()
-    if "series" in base:
-        base["series"] = base["series"].astype(str).str.strip().str.upper()
-        base = base.loc[base["series"].eq("EQ")].copy()
+    raw_all["date"] = pd.to_datetime(raw_all["date"], errors="coerce")
+    raw_all["symbol"] = raw_all["symbol"].astype(str).str.strip().str.upper()
+    if "series" in raw_all:
+        raw_all["series"] = raw_all["series"].astype(str).str.strip().str.upper()
+    start, end = pd.Timestamp(a.start), pd.Timestamp(a.end)
+    raw_all = raw_all.loc[raw_all["date"].between(start, end)].copy()
+    # Keep every original series in the output. Gap discovery and repair are
+    # restricted to fully-paid EQ shares because that is the strategy universe.
+    base = raw_all.loc[raw_all["series"].eq("EQ")].copy() if "series" in raw_all else raw_all.copy()
     detect_col = "requested_symbol" if "requested_symbol" in base.columns else "symbol"
     base[detect_col] = base[detect_col].astype(str).str.strip().str.upper()
-    start, end = pd.Timestamp(a.start), pd.Timestamp(a.end)
-    base = base.loc[base["date"].between(start, end)].copy()
     if base.empty:
-        raise SystemExit("No price observations fall in the requested date window")
+        raise SystemExit("No EQ price observations fall in the requested date window")
 
     calendar = pd.DatetimeIndex(sorted(base["date"].dropna().unique()))
     targets_by_date = defaultdict(set)
@@ -238,7 +240,7 @@ def main():
     # Keep raw rows as downloaded; no-trade marks are stored separately and
     # may only be used by the backtest to carry forward a mark, never as prices.
     add_df = pd.DataFrame(additions, columns=base.columns) if additions else pd.DataFrame(columns=base.columns)
-    result = pd.concat([base, add_df], ignore_index=True, sort=False)
+    result = pd.concat([raw_all, add_df], ignore_index=True, sort=False)
     result = result.dropna(subset=["date", "symbol"])
     result = result.drop_duplicates(["date", "symbol", "series"] if "series" in result else ["date", "symbol"])
     result = result.sort_values(["date", "symbol"]).reset_index(drop=True)
@@ -263,7 +265,7 @@ def main():
         "unique_bhavcopy_dates_attempted": int(len(all_days)),
         "bhavcopy_dates_parsed": int(fetched_days),
         "fetch_error_dates": int(len(fetch_errors)),
-        "rows_before": int(len(base)),
+        "rows_before": int(len(raw_all)),
         "rows_added": int(len(additions)),
         "rows_after": int(len(result)),
         "verified_no_trade_pairs": int(len(no_trade_df)),
