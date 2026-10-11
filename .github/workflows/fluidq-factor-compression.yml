@@ -48,18 +48,22 @@ jobs:
         run: |
           test -s integrity_artifact/data/input/verified_no_trade_dates.csv
           test -s integrity_artifact/results/price_quality/price_gap_readiness.json
+          test -s integrity_artifact/data/input/verified_symbol_map.csv
           python - <<'PY'
           import json
           p = "integrity_artifact/results/price_quality/price_gap_readiness.json"
           r = json.load(open(p))
           if r.get("status") != "PASS_PRICE_GAPS" or r.get("price_gap_integrity") != "PASS":
               raise SystemExit("Refusing to backtest: price-gap readiness gate did not pass")
+          if int(r.get("repair", {}).get("minimum_valid_bhavcopy_eq_rows", 0) or 0) < 500:
+              raise SystemExit("Refusing to run: daily bhavcopy completeness threshold is not recorded/passed")
           print("Price-gap gate passed; research remains provisional:", r.get("limitations"))
           PY
           mkdir -p data/processed/adjusted data/input results/factor_compression
           cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
           mkdir -p data/input
           cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
+          cp integrity_artifact/data/input/verified_symbol_map.csv data/input/verified_symbol_map.csv
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
       - name: Run compression backtest
         run: |
