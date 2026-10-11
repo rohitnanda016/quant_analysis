@@ -132,7 +132,8 @@ def main():
 
     missing_adjusted = post_summary.get("missing_adjusted_rows")
     continuity_events = post_summary.get("continuity_relevant_gt_50pct")
-    corp_action_review = (
+    corp_action_summary_available = bool(post_summary)
+    corp_action_review = (not corp_action_summary_available) or (
         missing_adjusted is not None and int(missing_adjusted) > 0
     ) or (
         continuity_events is not None and int(continuity_events) > 0
@@ -149,7 +150,7 @@ def main():
         "price_gap_integrity": "PASS" if not gap_blockers else "BLOCKED",
         "price_return_research": "PROVISIONAL" if not gap_blockers else "BLOCKED",
         "total_return_readiness": dividend_status,
-        "corporate_action_continuity": "REVIEW_REQUIRED" if corp_action_review else "NO_REPORTED_RESIDUALS",
+        "corporate_action_continuity": ("NOT_RUN" if not corp_action_summary_available else "REVIEW_REQUIRED") if corp_action_review else "NO_REPORTED_RESIDUALS",
         "date_min": str(calendar.min().date()) if len(calendar) else None,
         "date_max": str(calendar.max().date()) if len(calendar) else None,
         "raw_rows": int(len(p)),
