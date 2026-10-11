@@ -203,6 +203,9 @@ jobs:
           path: |
             data/raw/
             data/processed/v6_2/
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/verified_symbol_map.csv
             results/latest/
           retention-days: 30
 
