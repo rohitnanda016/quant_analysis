@@ -309,14 +309,28 @@ def main():
     # this automatic gap scan. This code never creates verified_no_trade rows.
     if nt_path.exists() and nt_path.stat().st_size:
         approved = pd.read_csv(nt_path, low_memory=False)
-        required_approved = {"date", "symbol", "status"}
+        required_approved = {"date", "symbol", "status", "verification_source", "evidence_reference"}
         if not required_approved.issubset(approved.columns):
-            raise SystemExit(f"Existing verified no-trade ledger missing columns: {sorted(required_approved-set(approved.columns))}")
-        approved = approved.loc[approved["status"].eq("verified_no_trade")].copy()
+            raise SystemExit(
+                "Existing verified no-trade ledger must contain date, symbol, status, "
+                "verification_source and evidence_reference; automatic archive absence is not enough."
+            )
+        approved["status"] = approved["status"].astype(str).str.strip()
+        approved["verification_source"] = approved["verification_source"].astype(str).str.strip()
+        approved["evidence_reference"] = approved["evidence_reference"].astype(str).str.strip()
+        approved = approved.loc[
+            approved["status"].eq("verified_no_trade")
+            & approved["verification_source"].ne("")
+            & approved["verification_source"].str.lower().ne("nan")
+            & approved["evidence_reference"].ne("")
+            & approved["evidence_reference"].str.lower().ne("nan")
+            & approved["verification_source"].str.lower().ne("nse daily bhavcopy eq universe")
+        ].copy()
         no_trade_df = approved
     else:
         no_trade_df = pd.DataFrame(columns=[
-            "date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"
+            "date", "symbol", "exchange_symbol_checked", "series", "status",
+            "verification_source", "evidence_reference"
         ])
     no_trade_df = no_trade_df.drop_duplicates(["date", "symbol"])
     exception_df = pd.DataFrame(absence_exceptions, columns=[
@@ -328,6 +342,18 @@ def main():
     exceptions_path = Path(a.exceptions_out)
     exceptions_path.parent.mkdir(parents=True, exist_ok=True)
     exception_df.to_csv(exceptions_path, index=False)
+
+    target_pairs_set = {
+        (pd.Timestamp(day), str(symbol).upper().strip())
+        for day, syms in targets_by_date.items()
+        for symbol in syms
+    }
+    approved_pairs = set()
+    if not no_trade_df.empty:
+        approved_dates = pd.to_datetime(no_trade_df["date"], errors="coerce")
+        approved_symbols = no_trade_df["symbol"].astype(str).str.upper().str.strip()
+        approved_pairs = set(zip(approved_dates, approved_symbols))
+    verified_target_no_trade_pairs = int(len(target_pairs_set & approved_pairs))
 
     report = {
         "source_input": str(src),
@@ -346,7 +372,8 @@ def main():
         "rows_before": int(len(raw_all)),
         "rows_added": int(len(additions)),
         "rows_after": int(len(result)),
-        "verified_no_trade_pairs": int(len(no_trade_df)),
+        "verified_no_trade_pairs": verified_target_no_trade_pairs,
+        "approved_ledger_rows_total": int(len(no_trade_df)),
         "archive_absence_review_pairs": int(len(exception_df)),
         "unresolved_target_pairs_due_to_fetch_errors": int(sum(x["target_symbols"] for x in fetch_errors)),
         "status": "BLOCKED" if fetch_errors else "PASS",
@@ -355,6 +382,7 @@ def main():
         "fetch_errors": fetch_errors,
         "verified_no_trade_ledger": str(nt_path),
         "unresolved_absence_exceptions": str(exceptions_path),
+        "approved_no_trade_evidence_fields": ["verification_source", "evidence_reference"],
         "note": "Only actual NSE EQ bhavcopy observations are added. Gaps absent from a successfully parsed archive are recorded as verified no-trade, not converted into synthetic raw price rows. Failed archive days remain unresolved.",
     }
     rp = Path(a.report); rp.parent.mkdir(parents=True, exist_ok=True)
