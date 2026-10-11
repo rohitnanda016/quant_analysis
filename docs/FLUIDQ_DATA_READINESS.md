@@ -53,3 +53,20 @@
 - **PASS_PRICE_GAPS** means the targeted long-gap repair was reconciled against daily source files. It does not certify membership quality, a complete split/bonus history, dividend adjustment, or investment readiness.
 - **PROVISIONAL price-return research** can help test plumbing and exploratory factor behavior once the gap gate passes.
 - **Total-return readiness remains BLOCKED** until dividend treatment and corporate-action continuity are established. Do not claim production-grade results before then.
+
+
+## Operational runbook — current repair generation
+
+1. Use **FLUID-Q Targeted Price Gap Repair** on branch `v1.2-factor-attribution` with base run ID `36875371038` (the source artifact `fluidq-finalized-full-history-36875371038`). The workflow now runs a parser preflight for legacy and UDiFF schemas before downloading the 254 MB dataset.
+2. The repair calls `NSEArchives.bhavcopy_raw`, which selects the legacy archive for historical dates and supports UDiFF-era files from 8 July 2024. The row parser normalizes the two schemas and converts legacy `TURNOVER_LACS` into rupees before writing the raw series. The source response must include at least 500 EQ observations before absence of a symbol is treated as no-trade evidence.
+3. The broad scan has an initial inventory of 2,892 archive dates and 42,741 candidate symbol/date pairs. It processes at most three source sessions concurrently and logs every 50 dates. This is source verification, not a job that should be judged by the old targeted repair's one-symbol windows.
+4. Inspect `results/price_quality/price_gap_readiness.json` in the run artifact. Use the artifact as an exploratory **price-return** input only if `status=PASS_PRICE_GAPS`. The gate also requires basic raw-price quality and current archive-adapter provenance. If blocked, use the diagnostic artifact, not the research-input artifact.
+5. Research workflows are manual-only and require the explicit run ID of the gated artifact. Old queued runs that were created before this change may still be running against a fixed historic price-integrity artifact; their output is stale/unqualified even if a job says success. Do not use those outputs for factor selection or reports.
+
+## Remaining release work after source-gap repair
+
+- **Corporate actions:** the current adjustment is split/bonus-only. Resolve the residual outliers against issuer/ex-date evidence, then build dividend-aware total return. Keep `total_return_ready=false` in all outputs until that is verified.
+- **Membership:** review every `snapshot_floor` historical interval against dated evidence and re-run survivorship/look-ahead tests.
+- **Execution and costs:** re-check the close-to-close timing with signal/execution dates, bid/ask and liquidity sensitivity, and alternate cost assumptions. The current linear transaction-cost estimate is a sensitivity model, not a fill simulation.
+- **Benchmarks:** report both price-index-relative momentum (if retained as a factor) and total-return benchmark performance once a sourced TRI series is available.
+- **Locked evaluation:** do not use 2026-09-01 through 2027-08-31 to choose factor weights, rebalance frequency, exposure thresholds, or holding counts.
