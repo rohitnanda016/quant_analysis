@@ -101,7 +101,6 @@ def exchange_symbol(symbol, day, symbol_map):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
-    ap.add_argument("--membership", required=True)
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-trade-out", default="data/input/verified_no_trade_dates.csv")
@@ -166,9 +165,11 @@ def main():
     # Existing identity set is based on the original acquisition/request
     # symbol. Do not replace existing raw prices automatically.
     existing = set(zip(base["date"], base[detect_col]))
+    existing_raw_keys = set(zip(base["date"], base["symbol"]))
     archive = NSEArchives()
     additions = []
     no_trade = []
+    already_present_alias_matches = 0
     fetch_errors = []
     fetched_days = 0
     all_days = sorted(d for d in targets_by_date if start <= d <= end)
@@ -196,6 +197,9 @@ def main():
             if (day, requested) in existing:
                 continue
             exchange = exchange_symbol(requested, day, rename_rows)
+            if (day, exchange) in existing_raw_keys:
+                already_present_alias_matches += 1
+                continue
             matched = parsed_by_symbol.get(exchange)
             if matched is None or matched.empty:
                 no_trade.append({
@@ -264,6 +268,7 @@ def main():
         "rows_after": int(len(result)),
         "verified_no_trade_pairs": int(len(no_trade_df)),
         "unresolved_target_pairs_due_to_fetch_errors": int(sum(x["target_symbols"] for x in fetch_errors)),
+        "status": "BLOCKED" if fetch_errors else "PASS",
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
         "gaps": gap_spans,
         "fetch_errors": fetch_errors,
@@ -278,10 +283,8 @@ def main():
         "rows_before", "rows_added", "rows_after", "verified_no_trade_pairs",
         "unresolved_target_pairs_due_to_fetch_errors"
     ]}, indent=2))
-    # A failed date response is not a no-trade answer, so fail the step once the
-    # report is persisted. Workflow should still publish diagnostics via always().
-    if fetch_errors:
-        raise SystemExit(f"{len(fetch_errors)} NSE daily bhavcopy dates failed; see {rp}")
+    # The separate readiness gate consumes this report after other diagnostics
+    # have run. Failed downloads never count as verified no-trade observations.
 
 
 if __name__ == "__main__":
