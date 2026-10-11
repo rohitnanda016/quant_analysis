@@ -48,6 +48,15 @@ jobs:
             --out data/raw/stage_a_prices_repaired.csv
           mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
           cat data/raw/stage_a_prices_repaired.repair.json
+      - name: Block publication if held-symbol gap remains unresolved
+        run: >-
+          python scripts/gate_held_symbol_price_gaps.py
+          --prices data/raw/stage_a_prices.csv
+          --symbol IBVENTURES
+          --start 2018-06-01
+          --end 2018-11-15
+          --max-gap-days 15
+          --report results/price_quality/held_gap_gate.json
       - name: Audit raw price quality
         run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
       - name: Fetch NSE corporate actions
