@@ -46,6 +46,7 @@ jobs:
             --prices data/raw/stage_a_prices.csv \
             --out data/raw/stage_a_prices_repaired.csv \
             --no-trade-out data/input/verified_no_trade_dates.csv \
+            --exceptions-out data/input/unresolved_gap_exceptions.csv \
             --report results/price_quality/bhavcopy_gap_repair.json \
             --start 2014-01-01 --end 2026-08-31 \
             --min-gap-sessions 10 --sleep 0.15 --retries 3 --min-bhavcopy-eq-rows 500
@@ -103,6 +104,7 @@ jobs:
             data/raw/stage_a_prices.csv
             data/input/nifty500_membership.csv
             data/input/verified_no_trade_dates.csv
+            data/input/unresolved_gap_exceptions.csv
             data/input/nse_corporate_actions_2014_2026.csv
             data/input/verified_price_adjustment_actions.csv
             data/processed/adjusted/prices_adjusted_split_bonus.csv
