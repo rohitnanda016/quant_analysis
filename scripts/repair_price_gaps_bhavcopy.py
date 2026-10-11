@@ -302,6 +302,7 @@ def main():
 
     report = {
         "source_input": str(src),
+        "archive_api": "NSEArchives.bhavcopy_raw (legacy archive before 2024-07-08; UDiFF archive thereafter)",
         "date_start": str(start.date()),
         "date_end": str(end.date()),
         "calendar_sessions": int(len(calendar)),
