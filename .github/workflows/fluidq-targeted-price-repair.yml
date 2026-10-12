@@ -13,9 +13,12 @@ on:
         description: "Finalized full-history workflow run whose raw data should be repaired"
         required: true
 
+# Do not cancel a long-running archive scan when a newer commit arrives.
+# The repair reads thousands of official daily archives and should finish its
+# current attempt before a subsequent run competes for the same source.
 concurrency:
   group: fluidq-price-gap-repair-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
