@@ -227,6 +227,36 @@ def main():
         return pd.Timestamp(day), parsed, parsed_all, None
 
     completed = 0
+    run_started = time.monotonic()
+    checkpoint_path = Path(a.report).with_name("bhavcopy_repair_checkpoint.json")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write_checkpoint():
+        # Small, durable progress record so a runner interruption is diagnosable.
+        checkpoint = {
+            "status": "in_progress",
+            "completed_dates": int(completed),
+            "total_dates": int(len(all_days)),
+            "fetched_dates": int(fetched_days),
+            "added_rows": int(len(additions)),
+            "unresolved_absence_pairs": int(len(absence_exceptions)),
+            "fetch_error_dates": int(len(fetch_errors)),
+            "elapsed_seconds": round(time.monotonic() - run_started, 1),
+            "last_updated_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+            "benchmark_presence": benchmark_presence_counts,
+            "non_eq_target_presence": {
+                symbol: dict(series_counts)
+                for symbol, series_counts in sorted(non_eq_target_presence_counts.items())
+            },
+            "recent_errors": fetch_errors[-20:],
+            "diagnostic_examples": archive_diagnostic_examples[-20:],
+            "non_eq_examples": non_eq_target_presence_examples[-20:],
+            "note": "Progress checkpoint only; not a readiness report and not evidence of no-trade.",
+        }
+        temp_path = checkpoint_path.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(checkpoint, indent=2, default=str), encoding="utf-8")
+        temp_path.replace(checkpoint_path)
+
     with ThreadPoolExecutor(max_workers=max(1, min(a.workers, 6))) as pool:
         futures = {pool.submit(fetch_day, day): day for day in all_days}
         for future in as_completed(futures):
@@ -330,13 +360,22 @@ def main():
                     existing_raw_keys.add((day, exchange))
 
             completed += 1
-            if completed % 50 == 0 or completed == len(all_days):
+            if completed % 25 == 0 or completed == len(all_days):
+                elapsed = time.monotonic() - run_started
+                rate = completed / elapsed if elapsed > 0 else 0.0
+                eta = (len(all_days) - completed) / rate if rate > 0 else None
                 print(
                     f"bhavcopy dates {completed}/{len(all_days)}; fetched={fetched_days}; "
                     f"added={len(additions)}; unresolved_absences={len(absence_exceptions)}; "
-                    f"errors={len(fetch_errors)}",
+                    f"errors={len(fetch_errors)}; elapsed_s={elapsed:.0f}; "
+                    f"rate_dates_s={rate:.3f}; eta_s={eta:.0f}" if eta is not None else
+                    f"bhavcopy dates {completed}/{len(all_days)}; fetched={fetched_days}; "
+                    f"added={len(additions)}; unresolved_absences={len(absence_exceptions)}; "
+                    f"errors={len(fetch_errors)}; elapsed_s={elapsed:.0f}; rate_dates_s={rate:.3f}",
                     flush=True,
                 )
+            if completed % 100 == 0 or completed == len(all_days):
+                write_checkpoint()
 
     # Keep raw rows as downloaded; no-trade marks are stored separately and
     # may only be used by the backtest to carry forward a mark, never as prices.
