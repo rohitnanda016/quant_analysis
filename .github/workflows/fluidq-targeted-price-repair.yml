@@ -70,10 +70,10 @@ jobs:
       - name: Install restored checkpoint files
         if: ${{ inputs.checkpoint_run_id != '' }}
         run: |
-          if [ -d repair_checkpoint/results/price_quality ]; then
-            cp -n repair_checkpoint/results/price_quality/bhavcopy_repair_checkpoint.json results/price_quality/ 2>/dev/null || true
-            cp -n repair_checkpoint/results/price_quality/bhavcopy_repair_additions.csv results/price_quality/ 2>/dev/null || true
-            cp -n repair_checkpoint/results/price_quality/bhavcopy_repair_absences.csv results/price_quality/ 2>/dev/null || true
+          if [ -d repair_checkpoint ]; then
+            cp -n repair_checkpoint/bhavcopy_repair_checkpoint.json results/price_quality/ 2>/dev/null || true
+            cp -n repair_checkpoint/bhavcopy_repair_additions.csv results/price_quality/ 2>/dev/null || true
+            cp -n repair_checkpoint/bhavcopy_repair_absences.csv results/price_quality/ 2>/dev/null || true
           fi
 
       - name: Backfill long internal gaps from official NSE daily bhavcopy
