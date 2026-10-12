@@ -75,6 +75,7 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertTrue(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-31", 42628, 2892))
         self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-31", 42627, 2892))
         self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-30", 42628, 2892))
+        self.assertFalse(checkpoint_matches({}, "2014-01-01", "2026-08-31", 42628, 2892))
 
     def test_resumed_merge_deduplicates_date_symbol_series(self):
         from scripts.repair_price_gaps_bhavcopy import deduplicate_price_rows
