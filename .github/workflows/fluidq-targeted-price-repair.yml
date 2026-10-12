@@ -7,6 +7,7 @@ on:
       - "scripts/repair_price_gaps_bhavcopy.py"
       - "scripts/audit_price_gap_readiness.py"
       - "tests/test_price_gap_bhavcopy_parser.py"
+      - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
       base_run_id:
