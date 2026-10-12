@@ -96,16 +96,22 @@ jobs:
           fi
           exit $rc
 
-      - name: Upload resumable repair checkpoint
+      - name: Verify resumable checkpoint exists
         if: always()
+        run: |
+          echo "Checkpoint directory:"
+          ls -lah results/price_quality/ || true
+          test -s results/price_quality/bhavcopy_repair_checkpoint.json
+          test -f results/price_quality/bhavcopy_repair_additions.csv
+          test -f results/price_quality/bhavcopy_repair_absences.csv
+
+      - name: Upload resumable repair checkpoint
+        if: always() && hashFiles('results/price_quality/bhavcopy_repair_checkpoint.json') != ''
         uses: actions/upload-artifact@v4
         with:
           name: fluidq-price-repair-checkpoint-${{ github.run_id }}
-          path: |
-            results/price_quality/bhavcopy_repair_checkpoint.json
-            results/price_quality/bhavcopy_repair_additions.csv
-            results/price_quality/bhavcopy_repair_absences.csv
-          if-no-files-found: ignore
+          path: results/price_quality/bhavcopy_repair_*
+          if-no-files-found: error
           retention-days: 14
 
       - name: Audit raw price quality
