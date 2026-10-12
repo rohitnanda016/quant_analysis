@@ -237,6 +237,8 @@ def main():
             "status": "in_progress",
             "completed_dates": int(completed),
             "total_dates": int(len(all_days)),
+            "targeted_gap_spans": int(len(gap_spans)),
+            "target_symbol_date_pairs": int(sum(len(symbols) for symbols in targets_by_date.values())),
             "fetched_dates": int(fetched_days),
             "added_rows": int(len(additions)),
             "unresolved_absence_pairs": int(len(absence_exceptions)),
