@@ -46,6 +46,22 @@ PRICE_COLS = {
 }
 
 
+def checkpoint_matches(checkpoint, start, end, target_pairs, total_dates):
+    """Reject checkpoints produced for a different repair inventory."""
+    return (
+        checkpoint.get("date_start") == str(pd.Timestamp(start).date())
+        and checkpoint.get("date_end") == str(pd.Timestamp(end).date())
+        and checkpoint.get("target_symbol_date_pairs") == int(target_pairs)
+        and checkpoint.get("total_dates") == int(total_dates)
+    )
+
+
+def deduplicate_price_rows(frame):
+    """Keep one observation per date/symbol/series after a resumed merge."""
+    keys = ["date", "symbol", "series"] if "series" in frame.columns else ["date", "symbol"]
+    return frame.drop_duplicates(keys)
+
+
 def norm(value):
     return " ".join(str(value).replace("\ufeff", "").replace("\xa0", " ").strip().strip('"').split()).upper()
 
@@ -238,8 +254,7 @@ def main():
     if a.resume and checkpoint_path.exists():
         prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         expected_pairs = int(sum(len(symbols) for symbols in targets_by_date.values()))
-        if (prior.get("date_start") != str(start.date()) or prior.get("date_end") != str(end.date())
-                or prior.get("target_symbol_date_pairs") != expected_pairs or prior.get("total_dates") != len(all_days)):
+        if not checkpoint_matches(prior, start, end, expected_pairs, len(all_days)):
             raise SystemExit("Resume checkpoint does not match current targets; refusing unsafe resume.")
         completed_date_values = set(prior.get("completed_date_values", []))
         completed = len(completed_date_values)
@@ -422,7 +437,7 @@ def main():
     add_df = pd.DataFrame(additions, columns=base.columns) if additions else pd.DataFrame(columns=base.columns)
     result = pd.concat([raw_all, add_df], ignore_index=True, sort=False)
     result = result.dropna(subset=["date", "symbol"])
-    result = result.drop_duplicates(["date", "symbol", "series"] if "series" in result else ["date", "symbol"])
+    result = deduplicate_price_rows(result)
     result = result.sort_values(["date", "symbol"]).reset_index(drop=True)
 
     nt_path = Path(a.no_trade_out)

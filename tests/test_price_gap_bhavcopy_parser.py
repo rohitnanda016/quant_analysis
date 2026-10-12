@@ -63,6 +63,30 @@ class ParseBhavcopyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_archive(csv, date(2024, 7, 8))
 
+    def test_checkpoint_resume_requires_matching_inventory(self):
+        from scripts.repair_price_gaps_bhavcopy import checkpoint_matches
+
+        checkpoint = {
+            "date_start": "2014-01-01",
+            "date_end": "2026-08-31",
+            "target_symbol_date_pairs": 42628,
+            "total_dates": 2892,
+        }
+        self.assertTrue(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-31", 42628, 2892))
+        self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-31", 42627, 2892))
+        self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-30", 42628, 2892))
+
+    def test_resumed_merge_deduplicates_date_symbol_series(self):
+        from scripts.repair_price_gaps_bhavcopy import deduplicate_price_rows
+
+        frame = pd.DataFrame([
+            {"date": "2024-01-02", "symbol": "ABC", "series": "EQ", "close": 10},
+            {"date": "2024-01-02", "symbol": "ABC", "series": "EQ", "close": 10},
+            {"date": "2024-01-02", "symbol": "ABC", "series": "BE", "close": 10},
+        ])
+        result = deduplicate_price_rows(frame)
+        self.assertEqual(len(result), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
