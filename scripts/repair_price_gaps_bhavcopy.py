@@ -130,6 +130,7 @@ def main():
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--workers", type=int, default=3, help="Concurrent source sessions; keep modest to avoid excessive exchange requests.")
     ap.add_argument("--min-bhavcopy-eq-rows", type=int, default=500, help="Reject partial/invalid archives rather than using them as no-trade evidence.")
+    ap.add_argument("--resume", action="store_true", help="Resume from a validated local repair checkpoint.")
     a = ap.parse_args()
 
     src = Path(a.prices)
@@ -227,9 +228,36 @@ def main():
         return pd.Timestamp(day), parsed, parsed_all, None
 
     completed = 0
+    completed_date_values = set()
     run_started = time.monotonic()
     checkpoint_path = Path(a.report).with_name("bhavcopy_repair_checkpoint.json")
+    additions_path = checkpoint_path.with_name("bhavcopy_repair_additions.csv")
+    absences_path = checkpoint_path.with_name("bhavcopy_repair_absences.csv")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if a.resume and checkpoint_path.exists():
+        prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        expected_pairs = int(sum(len(symbols) for symbols in targets_by_date.values()))
+        if (prior.get("date_start") != str(start.date()) or prior.get("date_end") != str(end.date())
+                or prior.get("target_symbol_date_pairs") != expected_pairs or prior.get("total_dates") != len(all_days)):
+            raise SystemExit("Resume checkpoint does not match current targets; refusing unsafe resume.")
+        completed_date_values = set(prior.get("completed_date_values", []))
+        completed = len(completed_date_values)
+        if additions_path.exists() and additions_path.stat().st_size:
+            additions = pd.read_csv(additions_path, low_memory=False).to_dict("records")
+        if absences_path.exists() and absences_path.stat().st_size:
+            absence_exceptions = pd.read_csv(absences_path, low_memory=False).to_dict("records")
+        fetched_days = int(prior.get("fetched_dates", 0))
+        fetch_errors = list(prior.get("fetch_errors", []))
+        benchmark_presence_counts = prior.get("benchmark_presence", benchmark_presence_counts)
+        for symbol, counts in prior.get("non_eq_target_presence", {}).items():
+            for series_name, count in counts.items():
+                non_eq_target_presence_counts[symbol][series_name] = int(count)
+        archive_diagnostic_examples = list(prior.get("diagnostic_examples", []))
+        non_eq_target_presence_examples = list(prior.get("non_eq_examples", []))
+        existing.update((pd.Timestamp(row["date"]), str(row.get("requested_symbol", row["symbol"])).upper()) for row in additions)
+        existing_raw_keys.update((pd.Timestamp(row["date"]), str(row["symbol"]).upper()) for row in additions)
+        print(f"Resuming repair: {completed}/{len(all_days)} successful dates; {len(additions)} persisted rows.", flush=True)
 
     def write_checkpoint():
         # Small, durable progress record so a runner interruption is diagnosable.
@@ -237,6 +265,9 @@ def main():
             "status": "in_progress",
             "completed_dates": int(completed),
             "total_dates": int(len(all_days)),
+            "date_start": str(start.date()),
+            "date_end": str(end.date()),
+            "completed_date_values": sorted(completed_date_values),
             "targeted_gap_spans": int(len(gap_spans)),
             "target_symbol_date_pairs": int(sum(len(symbols) for symbols in targets_by_date.values())),
             "fetched_dates": int(fetched_days),
@@ -251,16 +282,20 @@ def main():
                 for symbol, series_counts in sorted(non_eq_target_presence_counts.items())
             },
             "recent_errors": fetch_errors[-20:],
+            "fetch_errors": fetch_errors,
             "diagnostic_examples": archive_diagnostic_examples[-20:],
             "non_eq_examples": non_eq_target_presence_examples[-20:],
             "note": "Progress checkpoint only; not a readiness report and not evidence of no-trade.",
         }
+        pd.DataFrame(additions, columns=base.columns).to_csv(additions_path, index=False)
+        pd.DataFrame(absence_exceptions, columns=["date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"]).to_csv(absences_path, index=False)
         temp_path = checkpoint_path.with_suffix(".tmp")
         temp_path.write_text(json.dumps(checkpoint, indent=2, default=str), encoding="utf-8")
         temp_path.replace(checkpoint_path)
 
     with ThreadPoolExecutor(max_workers=max(1, min(a.workers, 6))) as pool:
-        futures = {pool.submit(fetch_day, day): day for day in all_days}
+        pending_days = [day for day in all_days if pd.Timestamp(day).date().isoformat() not in completed_date_values]
+        futures = {pool.submit(fetch_day, day): day for day in pending_days}
         for future in as_completed(futures):
             day = pd.Timestamp(futures[future])
             target_symbols = targets_by_date[day]
@@ -361,6 +396,9 @@ def main():
                     existing.add((day, requested))
                     existing_raw_keys.add((day, exchange))
 
+            if err is None and parsed is not None:
+                completed_date_values.add(day.date().isoformat())
+                fetch_errors = [item for item in fetch_errors if item.get("date") != day.date().isoformat()]
             completed += 1
             if completed % 25 == 0 or completed == len(all_days):
                 elapsed = time.monotonic() - run_started

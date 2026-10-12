@@ -12,6 +12,10 @@ on:
       base_run_id:
         description: "Finalized full-history workflow run whose raw data should be repaired"
         required: true
+      checkpoint_run_id:
+        description: "Optional prior repair run ID whose checkpoint artifact should be restored"
+        required: false
+        default: ""
 
 # Do not cancel a long-running archive scan when a newer commit arrives.
 # The repair reads thousands of official daily archives and should finish its
@@ -53,6 +57,25 @@ jobs:
           cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
 
+      - name: Restore prior repair checkpoint
+        if: ${{ inputs.checkpoint_run_id != '' }}
+        uses: actions/download-artifact@v5
+        continue-on-error: true
+        with:
+          name: fluidq-price-repair-checkpoint-${{ inputs.checkpoint_run_id }}
+          path: repair_checkpoint
+          run-id: ${{ inputs.checkpoint_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install restored checkpoint files
+        if: ${{ inputs.checkpoint_run_id != '' }}
+        run: |
+          if [ -d repair_checkpoint/results/price_quality ]; then
+            cp -n repair_checkpoint/results/price_quality/bhavcopy_repair_checkpoint.json results/price_quality/ 2>/dev/null || true
+            cp -n repair_checkpoint/results/price_quality/bhavcopy_repair_additions.csv results/price_quality/ 2>/dev/null || true
+            cp -n repair_checkpoint/results/price_quality/bhavcopy_repair_absences.csv results/price_quality/ 2>/dev/null || true
+          fi
+
       - name: Backfill long internal gaps from official NSE daily bhavcopy
         id: bhavcopy_repair
         continue-on-error: true
@@ -65,12 +88,25 @@ jobs:
             --exceptions-out data/input/unresolved_gap_exceptions.csv \
             --report results/price_quality/bhavcopy_gap_repair.json \
             --start 2014-01-01 --end 2026-08-31 \
-            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500 \\
+            $([ -s results/price_quality/bhavcopy_repair_checkpoint.json ] && echo --resume)
           rc=$?
           if [ -s data/raw/stage_a_prices_repaired.csv ]; then
             mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
           fi
           exit $rc
+
+      - name: Upload resumable repair checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-repair-checkpoint-${{ github.run_id }}
+          path: |
+            results/price_quality/bhavcopy_repair_checkpoint.json
+            results/price_quality/bhavcopy_repair_additions.csv
+            results/price_quality/bhavcopy_repair_absences.csv
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Audit raw price quality
         id: raw_audit
