@@ -13,7 +13,7 @@ def num(s):
     return pd.to_numeric(s.astype(str).str.replace(",","",regex=False).str.replace("₹","",regex=False).str.strip(),errors="coerce")
 
 cols=["canonical_symbol","symbol","series","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
-total=missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
+total=invalid_dates=missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
 extreme_rows=[]; duplicate_examples=[]; seen=set()
 for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_memory=False):
     # This research dataset is an EQ-share strategy. Other NSE series (BE, SME,
@@ -24,7 +24,8 @@ for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_
         continue
     total += len(ch)
     if "canonical_symbol" not in ch.columns: ch["canonical_symbol"]=ch["symbol"]
-    ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
+    ch["date"]=pd.to_datetime(ch["date"],errors="coerce",format="mixed")
+    invalid_dates += int(ch["date"].isna().sum())
     if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns: ch["turnover_₹"]=ch["turnover ₹"]
     for c in ["prev_close","open","high","low","close","vwap","volume","turnover_₹"]:
         if c in ch: ch[c]=num(ch[c])
@@ -58,9 +59,9 @@ ext=pd.concat(extreme_rows,ignore_index=True) if extreme_rows else pd.DataFrame(
 extreme=len(ext)
 ext.to_csv(out/"extreme_returns_raw.csv",index=False)
 pd.DataFrame(duplicate_examples,columns=["canonical_symbol","date","symbol","series","close"]).to_csv(out/"duplicate_date_symbol_examples.csv",index=False)
-summary={"rows":total,"series_filter":"EQ only when series column is present","missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
+summary={"rows":total,"series_filter":"EQ only when series column is present","invalid_date_rows":invalid_dates,"missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
 "negative_volume":neg_volume,"negative_turnover":neg_turnover,"duplicate_date_symbol":duplicates,
 "duplicate_examples_written":len(duplicate_examples),"extreme_returns_gt_threshold":extreme,"extreme_threshold":a.extreme_pct,
-"note":"Quality checks are scoped to EQ observations for this equity strategy. Duplicate keys are canonical_symbol + date across the entire file, including chunk boundaries. Extreme-return detection uses NSE Prev Close; it is diagnostic, not evidence of a corporate action."}
+"note":"Quality checks are scoped to EQ observations for this equity strategy. Mixed date formats are parsed explicitly; invalid dates are counted separately and excluded from duplicate-key counting. Duplicate keys are canonical_symbol + date across the entire file, including chunk boundaries. Extreme-return detection uses NSE Prev Close; it is diagnostic, not evidence of a corporate action."}
 (out/"price_quality_summary.json").write_text(json.dumps(summary,indent=2))
 print(json.dumps(summary,indent=2))
