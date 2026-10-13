@@ -10,11 +10,20 @@ import json
 from pathlib import Path
 import pandas as pd
 
+try:
+    from scripts.membership_scope import build_membership_session_windows, in_membership_research_window
+except ModuleNotFoundError:
+    from membership_scope import build_membership_session_windows, in_membership_research_window
 
-def accounting_summary(target_pairs, rows_added, verified_no_trade_pairs, alias_matches, archive_absence_pairs, fetch_error_pairs):
+PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
+
+
+def accounting_summary(target_pairs, rows_added, verified_no_trade_pairs, alias_matches,
+                      archive_absence_pairs, fetch_error_pairs, alternate_series_pairs=0):
     """Count each targeted pair in exactly one reported disposition bucket."""
     buckets = {
         "observed_added": int(rows_added),
+        "observed_alternate_series": int(alternate_series_pairs),
         "verified_no_trade": int(verified_no_trade_pairs),
         "already_present_alias": int(alias_matches),
         "unresolved_archive_absence": int(archive_absence_pairs),
@@ -34,6 +43,8 @@ def main():
     ap.add_argument("--report", required=True)
     ap.add_argument("--min-gap-sessions", type=int, default=10)
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
+    ap.add_argument("--membership", default="data/input/nifty500_membership.csv")
+    ap.add_argument("--membership-warmup-sessions", type=int, default=252)
     args = ap.parse_args()
 
     p = pd.read_csv(args.prices, usecols=lambda c: c in {
@@ -44,10 +55,21 @@ def main():
     source_symbol = "requested_symbol" if "requested_symbol" in p.columns else "symbol"
     p[source_symbol] = p[source_symbol].astype(str).str.strip().str.upper()
     if "series" in p.columns:
-        p = p[p["series"].astype(str).str.upper().str.strip().eq("EQ")].copy()
+        p["series"] = p["series"].astype(str).str.upper().str.strip()
+        p = p[p["series"].isin(PRICE_CONTINUITY_SERIES)].copy()
     p = p.dropna(subset=["date"])
     calendar = pd.DatetimeIndex(sorted(p["date"].unique()))
-    date_to_i = {d: i for i, d in enumerate(calendar)}
+    date_to_i = {pd.Timestamp(d): i for i, d in enumerate(calendar)}
+
+    membership_path = Path(args.membership)
+    if not membership_path.exists():
+        raise SystemExit(f"PIT membership file missing: {membership_path}")
+    membership_frame = pd.read_csv(membership_path, low_memory=False)
+    membership_windows = build_membership_session_windows(
+        membership_frame, calendar, warmup_sessions=args.membership_warmup_sessions
+    )
+    if not membership_windows:
+        raise SystemExit("No usable membership windows were found; refusing unscoped readiness audit.")
 
     nt_path = Path(args.verified_no_trade)
     if not nt_path.exists():
@@ -110,19 +132,30 @@ def main():
 
     missing_unverified = []
     long_gap_spans = []
+    candidate_gap_pairs_unfiltered = 0
+    excluded_gap_pairs_outside_membership_window = 0
     for symbol, group in p.groupby(source_symbol, sort=False):
-        idx = sorted({date_to_i[d] for d in group["date"].dropna().unique() if d in date_to_i})
+        idx = sorted({date_to_i[pd.Timestamp(d)] for d in group["date"].dropna().unique() if pd.Timestamp(d) in date_to_i})
         for left, right in zip(idx[:-1], idx[1:]):
             gap = right - left - 1
             if gap < args.min_gap_sessions:
+                continue
+            candidate_gap_pairs_unfiltered += gap
+            relevant_indices = [
+                i for i in range(left + 1, right)
+                if in_membership_research_window(symbol, i, membership_windows)
+            ]
+            excluded_gap_pairs_outside_membership_window += gap - len(relevant_indices)
+            if not relevant_indices:
                 continue
             long_gap_spans.append({
                 "symbol": str(symbol),
                 "last_observed": calendar[left].date().isoformat(),
                 "next_observed": calendar[right].date().isoformat(),
                 "missing_sessions": int(gap),
+                "relevant_missing_sessions": int(len(relevant_indices)),
             })
-            for i in range(left + 1, right):
+            for i in relevant_indices:
                 dd = pd.Timestamp(calendar[i])
                 resolved_alias = (dd, terminal_alias(symbol)) in observed_canonical_pairs
                 if (dd, str(symbol)) not in no_trade and not resolved_alias:
@@ -141,13 +174,19 @@ def main():
     target_pairs = int(repair.get("target_symbol_date_pairs", -1))
     unresolved_fetch_pairs = int(repair.get("unresolved_target_pairs_due_to_fetch_errors", -1))
     archive_absence_pairs = int(repair.get("archive_absence_review_pairs", 0) or 0)
+    eq_rows_added = int(repair.get("eq_rows_added", repair.get("rows_added", 0)) or 0)
+    alternate_series_pairs = (
+        int(repair.get("alternate_series_rows_added", 0) or 0)
+        + int(repair.get("already_present_alternate_series_pairs", 0) or 0)
+    )
     accounting = accounting_summary(
         target_pairs,
-        repair.get("rows_added", 0),
+        eq_rows_added,
         repair.get("verified_no_trade_pairs", 0),
         repair.get("already_present_alias_matches", 0) or 0,
         archive_absence_pairs,
         max(0, unresolved_fetch_pairs),
+        alternate_series_pairs,
     )
     accounted = accounting["accounted"]
     min_bhavcopy_rows = int(repair.get("minimum_valid_bhavcopy_eq_rows", 0) or 0)
@@ -187,7 +226,7 @@ def main():
     if unresolved_fetch_pairs > 0:
         gap_blockers.append(f"{unresolved_fetch_pairs} candidate symbol/date pair(s) remain unresolved due to fetch errors.")
     if archive_absence_pairs > 0:
-        gap_blockers.append(f"{archive_absence_pairs} symbol/date pairs are absent from parsed EQ bhavcopies but lack independent evidence of an active listing or suspension; review them before any carry-forward.")
+        gap_blockers.append(f"{archive_absence_pairs} symbol/date pairs lack an EQ/BE/BZ price observation and independent evidence of listing/suspension status; review them before any carry-forward.")
     if missing_unverified:
         gap_blockers.append(f"{len(missing_unverified)} missing pair(s) in long internal gaps are neither observed nor verified no-trade.")
 
@@ -214,6 +253,14 @@ def main():
         "corporate_action_continuity": ("NOT_RUN" if not corp_action_summary_available else "REVIEW_REQUIRED") if corp_action_review else "NO_REPORTED_RESIDUALS",
         "date_min": str(calendar.min().date()) if len(calendar) else None,
         "date_max": str(calendar.max().date()) if len(calendar) else None,
+        "membership_scope": {
+            "membership_file": str(membership_path),
+            "warmup_sessions_before_membership": int(args.membership_warmup_sessions),
+            "membership_aliases_matched": int(len(membership_windows)),
+            "all_history_candidate_gap_pairs": int(candidate_gap_pairs_unfiltered),
+            "pairs_excluded_outside_membership_window": int(excluded_gap_pairs_outside_membership_window),
+        },
+        "price_series_policy": "EQ preferred; observed BE/BZ closes count as price continuity with source series preserved. BE/BZ tradability is not assumed.",
         "raw_rows": int(len(p)),
         "symbols": int(p[source_symbol].nunique()),
         "repair": {
