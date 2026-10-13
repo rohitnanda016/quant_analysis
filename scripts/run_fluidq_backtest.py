@@ -41,6 +41,40 @@ def eq_tradable_rows(frame):
     return frame.loc[frame["series"].astype(str).str.upper().str.strip().eq("EQ")].copy()
 
 
+def prepare_price_identity(frame):
+    """Choose a stable issuer key, preferring canonical, requested, then raw symbol.
+
+    Daily bhavcopy repairs keep the actual historical exchange ticker in
+    "symbol" and the strategy identity in "requested_symbol". Falling back to
+    the exchange ticker would split renamed issuers into separate return
+    histories, so prefer the stable request key whenever canonical data are absent.
+    """
+    canonical_col = find_col(frame, ["canonical_symbol"])
+    requested_col = find_col(frame, ["requested_symbol"])
+    raw_col = find_col(frame, ["symbol"])
+    if not any([canonical_col, requested_col, raw_col]):
+        raise ValueError("Price input must contain canonical_symbol, requested_symbol or symbol.")
+
+    def usable(series):
+        value = series.astype("string").str.strip()
+        return value.notna() & value.ne("") & ~value.str.lower().isin(["nan", "none", "<na>"])
+
+    raw = frame[raw_col] if raw_col else pd.Series(pd.NA, index=frame.index)
+    requested = frame[requested_col] if requested_col else pd.Series(pd.NA, index=frame.index)
+    if canonical_col:
+        canonical = frame[canonical_col].where(usable(frame[canonical_col]), pd.NA)
+        if requested_col:
+            canonical = canonical.where(canonical.notna(), requested.where(usable(requested), pd.NA))
+        canonical = canonical.where(canonical.notna(), raw.where(usable(raw), pd.NA))
+        frame["_fluidq_research_symbol"] = canonical
+        return frame, "_fluidq_research_symbol", True
+    if requested_col:
+        requested = requested.where(usable(requested), raw.where(usable(raw), pd.NA))
+        frame["_fluidq_research_symbol"] = requested
+        return frame, "_fluidq_research_symbol", False
+    return frame, raw_col, False
+
+
 def canonicalize_symbol(series):
     return series.astype(str).str.upper().str.strip().replace(SYMBOL_ALIASES)
 
@@ -162,7 +196,8 @@ def main():
     w6m,w12,wr6,wtrend,wram=factor_weights
 
     df=pd.read_csv(a.prices,low_memory=False)
-    datec=find_col(df,["date"]); symc=find_col(df,["canonical_symbol","symbol"])
+    datec=find_col(df,["date"])
+    df,symc,identity_uses_canonical=prepare_price_identity(df)
     closec=find_col(df,["close"]); vwapc=find_col(df,["vwap"])
     turnc=find_col(df,["turnover_₹","turnover","turnover_rs"])
     seriesc=find_col(df,["series"])
@@ -217,7 +252,7 @@ def main():
 
     members=load_membership(
         a.membership,
-        canonical_symbols=str(symc).lower().replace(" ","_")=="canonical_symbol",
+        canonical_symbols=identity_uses_canonical,
     )
     sector_members=None
     if a.sector_constrained:
