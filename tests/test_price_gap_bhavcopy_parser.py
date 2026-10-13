@@ -1,9 +1,22 @@
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 
-from scripts.repair_price_gaps_bhavcopy import parse_archive
+from scripts.repair_price_gaps_bhavcopy import (
+    parse_archive,
+    checkpoint_matches,
+    target_inventory_fingerprint,
+)
+from scripts.membership_scope import (
+    build_membership_session_windows,
+    in_membership_research_window,
+)
 from scripts.audit_price_gap_readiness import accounting_summary
 
 
@@ -46,6 +59,19 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertAlmostEqual(float(row["volume"]), 12345.0)
         self.assertAlmostEqual(float(row["traded_value"]), 5100000.0)
 
+    def test_alternate_series_rows_are_preserved_for_price_continuity(self):
+        csv = (
+            "SYMBOL,SERIES,DATE,PREV_CLOSE,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,"
+            "LAST_PRICE,CLOSE_PRICE,AVG_PRICE,TTL_TRD_QNTY,TURNOVER_LACS,NO_OF_TRADES\\n"
+            "AARTIIND,EQ,03-Jul-2019,100,100,103,99,102,102,101,1000,1,10\\n"
+            "AARTIIND,BE,04-Jul-2019,102,102,104,101,103,103,103,800,0.8,8\\n"
+            "AARTIIND,BZ,05-Jul-2019,103,103,104,102,103,103,103,500,0.5,5\\n"
+        )
+        frame = parse_archive(csv, date(2019, 7, 4), filter_eq=False)
+        self.assertEqual(set(frame["series"]), {"EQ", "BE", "BZ"})
+        self.assertEqual(len(frame), 3)
+        self.assertEqual(frame.loc[frame["series"].eq("BE"), "close"].iloc[0], 103)
+
     def test_accounting_includes_unresolved_pairs_without_approving_them(self):
         result = accounting_summary(100, 20, 0, 5, 70, 5)
         self.assertEqual(result["accounted"], 100)
@@ -64,8 +90,6 @@ class ParseBhavcopyTests(unittest.TestCase):
             parse_archive(csv, date(2024, 7, 8))
 
     def test_checkpoint_resume_requires_matching_inventory(self):
-        from scripts.repair_price_gaps_bhavcopy import checkpoint_matches
-
         checkpoint = {
             "date_start": "2014-01-01",
             "date_end": "2026-08-31",
@@ -76,6 +100,56 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-31", 42627, 2892))
         self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-30", 42628, 2892))
         self.assertFalse(checkpoint_matches({}, "2014-01-01", "2026-08-31", 42628, 2892))
+
+        inventory = {pd.Timestamp("2024-01-02"): {"ABC", "XYZ"}}
+        fingerprint = target_inventory_fingerprint(inventory)
+        checkpoint.update({
+            "membership_warmup_sessions": 252,
+            "target_inventory_sha256": fingerprint,
+        })
+        self.assertTrue(checkpoint_matches(
+            checkpoint, "2014-01-01", "2026-08-31", 42628, 2892, 252, fingerprint
+        ))
+        self.assertFalse(checkpoint_matches(
+            checkpoint, "2014-01-01", "2026-08-31", 42628, 2892, 126, fingerprint
+        ))
+        self.assertFalse(checkpoint_matches(
+            checkpoint, "2014-01-01", "2026-08-31", 42628, 2892, 252, "different"
+        ))
+
+    def test_membership_scope_includes_signal_warmup_and_exit_session(self):
+        calendar = pd.date_range("2024-01-01", periods=12, freq="D")
+        membership = pd.DataFrame([{
+            "symbol": "ABC",
+            "canonical_symbol": "ABC",
+            "source_symbol": "OLDABC",
+            "valid_from": "2024-01-06",
+            "valid_to": "2024-01-08",
+        }])
+        windows = build_membership_session_windows(membership, calendar, warmup_sessions=2)
+        self.assertTrue(in_membership_research_window("ABC", 3, windows))
+        self.assertTrue(in_membership_research_window("OLDABC", 8, windows))
+        self.assertFalse(in_membership_research_window("ABC", 2, windows))
+        self.assertFalse(in_membership_research_window("ABC", 9, windows))
+
+    def test_mixed_date_formats_do_not_create_false_duplicate_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prices = root / "prices.csv"
+            outdir = root / "quality"
+            pd.DataFrame([
+                {"symbol": "DRDATSONS", "series": "EQ", "date": "2024-01-02", "prev_close": 9.5, "open": 9.6, "high": 10.0, "low": 9.4, "close": 9.85, "vwap": 9.8, "volume": 100, "turnover ₹": 1000},
+                {"symbol": "DRDATSONS", "series": "EQ", "date": "03-Jan-2024", "prev_close": 9.85, "open": 9.8, "high": 9.9, "low": 9.6, "close": 9.75, "vwap": 9.7, "volume": 110, "turnover ₹": 1100},
+                {"symbol": "DRDATSONS", "series": "EQ", "date": "2024/01/04", "prev_close": 9.75, "open": 9.7, "high": 9.8, "low": 9.3, "close": 9.4, "vwap": 9.5, "volume": 120, "turnover ₹": 1200},
+            ]).to_csv(prices, index=False)
+            subprocess.run([
+                sys.executable, "scripts/audit_price_quality.py",
+                "--prices", str(prices), "--outdir", str(outdir),
+            ], check=True, capture_output=True, text=True)
+            summary = json.loads((outdir / "price_quality_summary.json").read_text())
+            self.assertEqual(summary["invalid_date_rows"], 0)
+            self.assertEqual(summary["duplicate_date_symbol"], 0)
+            self.assertEqual(summary["rows"], 3)
 
     def test_resumed_merge_removes_only_exact_duplicate_rows(self):
         from scripts.repair_price_gaps_bhavcopy import deduplicate_price_rows
