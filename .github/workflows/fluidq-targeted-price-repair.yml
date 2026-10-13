@@ -1,13 +1,8 @@
 name: FLUID-Q Targeted Price Gap Repair
 
+# This multi-hour archive repair is intentionally dispatch-only. A normal code
+# push must not enqueue a fresh scan against an old checkpoint.
 on:
-  push:
-    branches: [v1.2-factor-attribution]
-    paths:
-      - "scripts/repair_price_gaps_bhavcopy.py"
-      - "scripts/audit_price_gap_readiness.py"
-      - "tests/test_price_gap_bhavcopy_parser.py"
-      - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
       base_run_id:
@@ -22,9 +17,8 @@ on:
         required: false
         default: "600"
 
-# Do not cancel a long-running archive scan when a newer commit arrives.
-# The repair reads thousands of official daily archives and should finish its
-# current attempt before a subsequent run competes for the same source.
+# Each follow-up batch is dispatched with the latest checkpoint run ID.
+# Serializing explicit batches avoids concurrent reads and stale checkpoint races.
 concurrency:
   group: fluidq-price-gap-repair-${{ github.ref }}
   cancel-in-progress: false
@@ -63,17 +57,17 @@ jobs:
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
 
       - name: Restore prior repair checkpoint
-        if: ${{ inputs.checkpoint_run_id != '' || github.event_name == 'push' }}
+        if: ${{ inputs.checkpoint_run_id != '' }}
         uses: actions/download-artifact@v5
         continue-on-error: true
         with:
-          name: fluidq-price-repair-checkpoint-${{ inputs.checkpoint_run_id || (github.event_name == 'push' && '38348992056') }}
+          name: fluidq-price-repair-checkpoint-${{ inputs.checkpoint_run_id }}
           path: repair_checkpoint
-          run-id: ${{ inputs.checkpoint_run_id || (github.event_name == 'push' && '38348992056') }}
+          run-id: ${{ inputs.checkpoint_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install restored checkpoint files
-        if: ${{ inputs.checkpoint_run_id != '' || github.event_name == 'push' }}
+        if: ${{ inputs.checkpoint_run_id != '' }}
         run: |
           if [ -d repair_checkpoint ]; then
             cp -n repair_checkpoint/bhavcopy_repair_checkpoint.json results/price_quality/ 2>/dev/null || true
