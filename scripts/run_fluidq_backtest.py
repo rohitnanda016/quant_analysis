@@ -63,8 +63,9 @@ def load_membership(path, canonical_symbols=False):
     if not sym:
         sym=find_col(m,["symbol","security","security_symbol","ticker"])
     if not sym: raise ValueError(f"Could not identify membership symbol column: {list(m.columns)}")
-    m=m.rename(columns={sym:"symbol"})
-    m["symbol"]=canonicalize_symbol(m["symbol"])
+    # Assignment (rather than rename) also handles files that already contain
+    # both raw and canonical symbol columns without creating duplicate labels.
+    m["symbol"]=canonicalize_symbol(m[sym])
     # The project membership artifact uses validity intervals, while older
     # experiments used review-date snapshots. Support both schemas explicitly.
     start=find_col(m,["review_date","effective_date","start_date","valid_from","date"])
