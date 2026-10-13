@@ -102,13 +102,19 @@ jobs:
           exit $rc
 
       - name: Verify resumable checkpoint exists
+        id: checkpoint_state
         if: always()
         run: |
           echo "Checkpoint directory:"
           ls -lah results/price_quality/ || true
-          test -s results/price_quality/bhavcopy_repair_checkpoint.json
-          test -f results/price_quality/bhavcopy_repair_additions.csv
-          test -f results/price_quality/bhavcopy_repair_absences.csv
+          if [ -s results/price_quality/bhavcopy_repair_checkpoint.json ] && [ -f results/price_quality/bhavcopy_repair_additions.csv ] && [ -f results/price_quality/bhavcopy_repair_absences.csv ]; then
+            python -c "import json; p=json.load(open('results/price_quality/bhavcopy_repair_checkpoint.json')); print('Checkpoint status:', p.get('status')); print('Completed dates:', len(p.get('completed_date_values', [])), '/', p.get('total_dates'))"
+            complete=$(python -c "import json; p=json.load(open('results/price_quality/bhavcopy_repair_checkpoint.json')); print('true' if p.get('status') == 'complete' else 'false')")
+          else
+            complete=false
+          fi
+          echo "complete=$complete" >> "$GITHUB_OUTPUT"
+          test "$complete" = "true" || echo "Repair batch incomplete; preserving checkpoint for a follow-up run."
 
       - name: Upload resumable repair checkpoint
         if: always() && hashFiles('results/price_quality/bhavcopy_repair_checkpoint.json') != ''
@@ -121,46 +127,48 @@ jobs:
 
       - name: Audit raw price quality
         id: raw_audit
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' }}
         continue-on-error: true
         run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
 
       - name: Fetch NSE corporate actions
         id: fetch_actions
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' }}
         continue-on-error: true
         run: python scripts/fetch_nse_corporate_actions.py --start 2014-01-01 --end 2026-08-31 --out data/input/nse_corporate_actions_2014_2026.csv
 
       - name: Reconcile extreme returns against NSE actions
         id: reconcile_actions
-        if: ${{ always() && steps.fetch_actions.outcome == 'success' && steps.raw_audit.outcome == 'success' }}
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.fetch_actions.outcome == 'success' && steps.raw_audit.outcome == 'success' }}
         continue-on-error: true
         run: python scripts/reconcile_extreme_returns.py --extremes results/price_quality/extreme_returns_raw.csv --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --out results/price_quality/extreme_return_reconciliation.csv
 
       - name: Build split and bonus adjustment table
         id: build_adjustments
-        if: ${{ always() && steps.fetch_actions.outcome == 'success' }}
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.fetch_actions.outcome == 'success' }}
         continue-on-error: true
         run: python scripts/build_price_adjustment_actions.py --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --supplemental data/input/verified_manual_corporate_actions.csv --out data/input/verified_price_adjustment_actions.csv
 
       - name: Apply split and bonus adjustments
         id: apply_adjustments
-        if: ${{ always() && steps.build_adjustments.outcome == 'success' }}
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.build_adjustments.outcome == 'success' }}
         continue-on-error: true
         run: python scripts/apply_verified_adjustments.py --prices data/raw/stage_a_prices.csv --actions data/input/verified_price_adjustment_actions.csv --symbol-map data/input/verified_symbol_map.csv --out data/processed/adjusted/prices_adjusted_split_bonus.csv
 
       - name: Audit post-adjustment continuity
         id: post_adjustment_audit
-        if: ${{ always() && steps.apply_adjustments.outcome == 'success' && steps.reconcile_actions.outcome == 'success' }}
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.apply_adjustments.outcome == 'success' && steps.reconcile_actions.outcome == 'success' }}
         continue-on-error: true
         run: python scripts/audit_post_adjustment.py --extremes results/price_quality/extreme_returns_raw.csv --reconciliation results/price_quality/extreme_return_reconciliation.csv --adjusted data/processed/adjusted/prices_adjusted_split_bonus.csv --outdir results/price_quality/post_adjustment
 
       - name: Inspect remaining corporate-action outliers
-        if: ${{ always() && steps.post_adjustment_audit.outcome == 'success' }}
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.post_adjustment_audit.outcome == 'success' }}
         continue-on-error: true
         run: python scripts/inspect_extreme_events.py --events results/price_quality/post_adjustment/post_adjustment_extreme_events.csv --actions data/input/nse_corporate_actions_2014_2026.csv --top 120
 
       - name: Run price-gap readiness gate
         id: gap_gate
-        if: always()
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' }}
         run: |
           python scripts/audit_price_gap_readiness.py \
             --prices data/raw/stage_a_prices.csv \
