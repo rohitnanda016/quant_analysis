@@ -7,6 +7,7 @@ independent listing/suspension evidence is supplied. It is never written as a
 synthetic raw price or automatically approved as a no-trade day.
 """
 import argparse
+import hashlib
 import io
 import json
 import time
@@ -18,7 +19,14 @@ from pathlib import Path
 import pandas as pd
 from jugaad_data.nse import NSEArchives
 
+try:
+    from scripts.membership_scope import build_membership_session_windows, in_membership_research_window
+except ModuleNotFoundError:
+    from membership_scope import build_membership_session_windows, in_membership_research_window
+
 _THREAD_LOCAL = threading.local()
+PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
+ALTERNATE_PRICE_SERIES = {"BE", "BZ"}
 
 
 def thread_archive():
@@ -46,14 +54,31 @@ PRICE_COLS = {
 }
 
 
-def checkpoint_matches(checkpoint, start, end, target_pairs, total_dates):
+def checkpoint_matches(checkpoint, start, end, target_pairs, total_dates,
+                       warmup_sessions=None, target_inventory_hash=None):
     """Reject checkpoints produced for a different repair inventory."""
-    return (
+    matches = (
         checkpoint.get("date_start") == str(pd.Timestamp(start).date())
         and checkpoint.get("date_end") == str(pd.Timestamp(end).date())
         and checkpoint.get("target_symbol_date_pairs") == int(target_pairs)
         and checkpoint.get("total_dates") == int(total_dates)
     )
+    if warmup_sessions is not None:
+        matches = matches and checkpoint.get("membership_warmup_sessions") == int(warmup_sessions)
+    if target_inventory_hash is not None:
+        matches = matches and checkpoint.get("target_inventory_sha256") == str(target_inventory_hash)
+    return matches
+
+
+def target_inventory_fingerprint(targets_by_date):
+    """Fingerprint exact date/symbol repair targets, not only inventory totals."""
+    pairs = sorted(
+        (pd.Timestamp(day).date().isoformat(), str(symbol).strip().upper())
+        for day, symbols in targets_by_date.items()
+        for symbol in symbols
+    )
+    payload = "\n".join(f"{day}|{symbol}" for day, symbol in pairs).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def deduplicate_price_rows(frame):
@@ -139,6 +164,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
+    ap.add_argument("--membership", default="data/input/nifty500_membership.csv")
+    ap.add_argument("--membership-warmup-sessions", type=int, default=252,
+                    help="Price-history sessions before membership needed for momentum/200DMA features.")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-trade-out", default="data/input/verified_no_trade_dates.csv")
     ap.add_argument("--exceptions-out", default="data/input/unresolved_gap_exceptions.csv")
@@ -158,7 +186,7 @@ def main():
     raw_all = pd.read_csv(src, low_memory=False)
     if not {"date", "symbol"}.issubset(raw_all.columns):
         raise SystemExit("Price file must contain date and symbol columns")
-    raw_all["date"] = pd.to_datetime(raw_all["date"], errors="coerce")
+    raw_all["date"] = pd.to_datetime(raw_all["date"], errors="coerce", format="mixed")
     raw_all["symbol"] = raw_all["symbol"].astype(str).str.strip().str.upper()
     if "series" in raw_all:
         raw_all["series"] = raw_all["series"].astype(str).str.strip().str.upper()
@@ -173,29 +201,49 @@ def main():
         raise SystemExit("No EQ price observations fall in the requested date window")
 
     calendar = pd.DatetimeIndex(sorted(base["date"].dropna().unique()))
+    membership_path = Path(a.membership)
+    if not membership_path.exists():
+        raise SystemExit(f"PIT membership file missing: {membership_path}")
+    membership_frame = pd.read_csv(membership_path, low_memory=False)
+    membership_windows = build_membership_session_windows(
+        membership_frame, calendar, warmup_sessions=a.membership_warmup_sessions
+    )
+    if not membership_windows:
+        raise SystemExit("No usable membership windows were found; refusing unscoped price-gap repair.")
+
     targets_by_date = defaultdict(set)
     gap_spans = []
-    date_to_idx = {d: i for i, d in enumerate(calendar)}
+    candidate_missing_pairs_unfiltered = 0
+    excluded_outside_membership_window = 0
+    date_to_idx = {pd.Timestamp(d): i for i, d in enumerate(calendar)}
     for symbol, group in base.groupby(detect_col, sort=False):
-        idx = sorted({date_to_idx[d] for d in group["date"].dropna().unique() if d in date_to_idx})
+        idx = sorted({date_to_idx[pd.Timestamp(d)] for d in group["date"].dropna().unique() if pd.Timestamp(d) in date_to_idx})
         if len(idx) < 2:
             continue
         for left, right in zip(idx[:-1], idx[1:]):
             missing_count = right - left - 1
             if missing_count < a.min_gap_sessions:
                 continue
-            gap_start = calendar[left + 1]
-            gap_end = calendar[right - 1]
+            candidate_missing_pairs_unfiltered += missing_count
+            relevant_indices = [
+                i for i in range(left + 1, right)
+                if in_membership_research_window(symbol, i, membership_windows)
+            ]
+            excluded_outside_membership_window += missing_count - len(relevant_indices)
+            if not relevant_indices:
+                continue
             gap_spans.append({
                 "symbol": str(symbol),
                 "last_observed": calendar[left].date().isoformat(),
                 "next_observed": calendar[right].date().isoformat(),
                 "missing_sessions": int(missing_count),
-                "gap_start": gap_start.date().isoformat(),
-                "gap_end": gap_end.date().isoformat(),
+                "targeted_missing_sessions": int(len(relevant_indices)),
+                "gap_start": calendar[relevant_indices[0]].date().isoformat(),
+                "gap_end": calendar[relevant_indices[-1]].date().isoformat(),
             })
-            for i in range(left + 1, right):
+            for i in relevant_indices:
                 targets_by_date[calendar[i]].add(str(symbol))
+    target_inventory_hash = target_inventory_fingerprint(targets_by_date)
 
     # Rename map applies on the effective date, so a historical query ticker
     # can still be repaired from the exchange ticker actually used that day.
@@ -206,14 +254,24 @@ def main():
     rename_rows = [(r.old_symbol, r.new_symbol, r.effective_from)
                    for r in sm.itertuples() if pd.notna(r.effective_from)]
 
-    # Existing identity set is based on the original acquisition/request
-    # symbol. Do not replace existing raw prices automatically.
+    # EQ observations define eligibility and gap discovery. Existing BE/BZ
+    # observations are also valid market-price marks for return continuity,
+    # but their original series must be preserved for execution-eligibility checks.
     existing = set(zip(base["date"], base[detect_col]))
-    existing_raw_keys = set(zip(base["date"], base["symbol"]))
+    existing_eq_raw_keys = set(zip(base["date"], base["symbol"]))
+    if "series" in raw_all.columns:
+        continuity_rows = raw_all.loc[
+            raw_all["series"].astype(str).str.strip().str.upper().isin(PRICE_CONTINUITY_SERIES)
+        ]
+    else:
+        continuity_rows = raw_all
+    existing_raw_keys = set(zip(continuity_rows["date"], continuity_rows["symbol"]))
     additions = []
     no_trade = []  # Only independently verified entries from an existing approved ledger.
     absence_exceptions = []
     already_present_alias_matches = 0
+    already_present_alternate_series_pairs = 0
+    alternate_series_rows_added = 0
     fetch_errors = []
     fetched_days = 0
     # Diagnostics distinguish a true symbol-level absence from a partial or
@@ -259,25 +317,43 @@ def main():
     if a.resume and checkpoint_path.exists():
         prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         expected_pairs = int(sum(len(symbols) for symbols in targets_by_date.values()))
-        if not checkpoint_matches(prior, start, end, expected_pairs, len(all_days)):
-            raise SystemExit("Resume checkpoint does not match current targets; refusing unsafe resume.")
-        completed_date_values = set(prior.get("completed_date_values", []))
-        completed = len(completed_date_values)
-        if additions_path.exists() and additions_path.stat().st_size:
-            additions = pd.read_csv(additions_path, low_memory=False).to_dict("records")
-        if absences_path.exists() and absences_path.stat().st_size:
-            absence_exceptions = pd.read_csv(absences_path, low_memory=False).to_dict("records")
-        fetched_days = int(prior.get("fetched_dates", 0))
-        fetch_errors = list(prior.get("fetch_errors", []))
-        benchmark_presence_counts = prior.get("benchmark_presence", benchmark_presence_counts)
-        for symbol, counts in prior.get("non_eq_target_presence", {}).items():
-            for series_name, count in counts.items():
-                non_eq_target_presence_counts[symbol][series_name] = int(count)
-        archive_diagnostic_examples = list(prior.get("diagnostic_examples", []))
-        non_eq_target_presence_examples = list(prior.get("non_eq_examples", []))
-        existing.update((pd.Timestamp(row["date"]), str(row.get("requested_symbol", row["symbol"])).upper()) for row in additions)
-        existing_raw_keys.update((pd.Timestamp(row["date"]), str(row["symbol"]).upper()) for row in additions)
-        print(f"Resuming repair: {completed}/{len(all_days)} successful dates; {len(additions)} persisted rows.", flush=True)
+        if not checkpoint_matches(
+            prior, start, end, expected_pairs, len(all_days),
+            warmup_sessions=a.membership_warmup_sessions,
+            target_inventory_hash=target_inventory_hash,
+        ):
+            # Membership scoping changes the inventory materially. Never mix
+            # additions/absence rows from the old all-history inventory with
+            # the new target set; discard stale checkpoint state and start clean.
+            print(
+                "Checkpoint inventory mismatch; discarding stale checkpoint and rebuilding "
+                "from the finalized source dataset.",
+                flush=True,
+            )
+            for stale_path in (checkpoint_path, additions_path, absences_path):
+                stale_path.unlink(missing_ok=True)
+        else:
+            completed_date_values = set(prior.get("completed_date_values", []))
+            completed = len(completed_date_values)
+            if additions_path.exists() and additions_path.stat().st_size:
+                additions = pd.read_csv(additions_path, low_memory=False).to_dict("records")
+            if absences_path.exists() and absences_path.stat().st_size:
+                absence_exceptions = pd.read_csv(absences_path, low_memory=False).to_dict("records")
+            fetched_days = int(prior.get("fetched_dates", 0))
+            fetch_errors = list(prior.get("fetch_errors", []))
+            benchmark_presence_counts = prior.get("benchmark_presence", benchmark_presence_counts)
+            for symbol, counts in prior.get("non_eq_target_presence", {}).items():
+                for series_name, count in counts.items():
+                    non_eq_target_presence_counts[symbol][series_name] = int(count)
+            archive_diagnostic_examples = list(prior.get("diagnostic_examples", []))
+            non_eq_target_presence_examples = list(prior.get("non_eq_examples", []))
+            already_present_alias_matches = int(prior.get("already_present_alias_matches", 0))
+            already_present_alternate_series_pairs = int(prior.get("already_present_alternate_series_pairs", 0))
+            alternate_series_rows_added = int(prior.get("alternate_series_rows_added", 0))
+            existing.update((pd.Timestamp(row["date"]), str(row.get("requested_symbol", row["symbol"])).upper()) for row in additions)
+            existing_raw_keys.update((pd.Timestamp(row["date"]), str(row["symbol"]).upper()) for row in additions)
+            existing.update((pd.Timestamp(row["date"]), str(row.get("requested_symbol", row["symbol"])).upper()) for row in absence_exceptions)
+            print(f"Resuming repair: {completed}/{len(all_days)} successful dates; {len(additions)} persisted rows.", flush=True)
 
     def write_checkpoint():
         # Small, durable progress record so a runner interruption is diagnosable.
@@ -287,11 +363,16 @@ def main():
             "total_dates": int(len(all_days)),
             "date_start": str(start.date()),
             "date_end": str(end.date()),
+            "membership_warmup_sessions": int(a.membership_warmup_sessions),
+            "target_inventory_sha256": target_inventory_hash,
             "completed_date_values": sorted(completed_date_values),
             "targeted_gap_spans": int(len(gap_spans)),
             "target_symbol_date_pairs": int(sum(len(symbols) for symbols in targets_by_date.values())),
             "fetched_dates": int(fetched_days),
             "added_rows": int(len(additions)),
+            "alternate_series_rows_added": int(alternate_series_rows_added),
+            "already_present_alias_matches": int(already_present_alias_matches),
+            "already_present_alternate_series_pairs": int(already_present_alternate_series_pairs),
             "unresolved_absence_pairs": int(len(absence_exceptions)),
             "fetch_error_dates": int(len(fetch_errors)),
             "elapsed_seconds": round(time.monotonic() - run_started, 1),
@@ -361,12 +442,18 @@ def main():
                         continue
                     exchange = exchange_symbol(requested, day, rename_rows)
                     if (day, exchange) in existing_raw_keys:
-                        already_present_alias_matches += 1
+                        if (day, exchange) in existing_eq_raw_keys:
+                            already_present_alias_matches += 1
+                        else:
+                            already_present_alternate_series_pairs += 1
                         continue
                     matched = parsed_by_symbol.get(exchange)
+                    matched_from_alternate_series = False
                     if matched is None or matched.empty:
-                        # Record whether the ticker exists in the archive under a non-EQ series.
-                        # This helps distinguish a series transition from a missing ticker.
+                        # Keep BE/BZ observations as genuine prices without
+                        # relabeling them as EQ. These series can support a
+                        # continuous price mark; execution eligibility is
+                        # evaluated separately from price continuity.
                         all_series_rows = all_series_by_symbol.get(exchange)
                         other_series = [] if all_series_rows is None else sorted({
                             str(x).strip().upper() for x in all_series_rows["series"].dropna()
@@ -380,22 +467,45 @@ def main():
                                     "date": day.date().isoformat(), "symbol": requested,
                                     "exchange_symbol_checked": exchange, "non_eq_series": other_series,
                                 })
-                        # Absence from a complete bhavcopy does not, by itself,
-                        # prove a genuine no-trade day: the symbol may have been
-                        # renamed, suspended, delisted, or moved series. Keep it
-                        # unresolved until an authoritative status/lineage source
-                        # explains the absence. Never use it for return carry-forward.
-                        absence_exceptions.append({
-                            "date": day.date().isoformat(),
-                            "symbol": requested,
-                            "exchange_symbol_checked": exchange,
-                            "series": "EQ",
-                            "status": "unresolved_archive_absence",
-                            "verification_source": "NSE daily EQ bhavcopy has no matching ticker; listing/suspension status not independently verified",
-                        })
-                        continue
+                        alternate = pd.DataFrame()
+                        if all_series_rows is not None and not all_series_rows.empty:
+                            alternate = all_series_rows.loc[
+                                all_series_rows["series"].astype(str).str.strip().str.upper().isin(ALTERNATE_PRICE_SERIES)
+                                & pd.to_numeric(all_series_rows["close"], errors="coerce").gt(0)
+                            ].copy()
+                        if not alternate.empty:
+                            candidate_series = alternate["series"].astype(str).str.strip().str.upper().unique()
+                            candidate_closes = pd.to_numeric(alternate["close"], errors="coerce").dropna().unique()
+                            if len(candidate_series) == 1 and len(candidate_closes) == 1:
+                                matched = alternate
+                                matched_from_alternate_series = True
+                            else:
+                                absence_exceptions.append({
+                                    "date": day.date().isoformat(),
+                                    "symbol": requested,
+                                    "exchange_symbol_checked": exchange,
+                                    "series": "|".join(candidate_series.astype(str)),
+                                    "status": "unresolved_ambiguous_alternate_series",
+                                    "verification_source": "NSE bhavcopy contains multiple alternate-series price candidates; independent review required",
+                                })
+                                continue
+                        else:
+                            # The symbol is absent from all price-continuity
+                            # series. Presence in a debt/other series is not
+                            # evidence of an equity price or a no-trade day.
+                            absence_exceptions.append({
+                                "date": day.date().isoformat(),
+                                "symbol": requested,
+                                "exchange_symbol_checked": exchange,
+                                "series": "|".join(other_series) if other_series else "EQ",
+                                "status": "unresolved_archive_absence",
+                                "verification_source": "NSE bhavcopy has no matching EQ/BE/BZ price row; listing/suspension status needs independent verification",
+                            })
+                            continue
 
                     row = matched.iloc[-1].to_dict()
+                    if matched_from_alternate_series:
+                        alternate_series_rows_added += 1
                     new = {col: pd.NA for col in base.columns}
                     for col in [
                         "symbol", "series", "date", "prev_close", "open", "high",
@@ -417,6 +527,8 @@ def main():
                     additions.append(new)
                     existing.add((day, requested))
                     existing_raw_keys.add((day, exchange))
+                    if str(new.get("series", "EQ")).strip().upper() == "EQ":
+                        existing_eq_raw_keys.add((day, exchange))
 
             if err is None and parsed is not None:
                 completed_date_values.add(day.date().isoformat())
@@ -510,6 +622,14 @@ def main():
         "date_end": str(end.date()),
         "calendar_sessions": int(len(calendar)),
         "minimum_internal_gap_sessions_targeted": int(a.min_gap_sessions),
+        "membership_scope": {
+            "membership_file": str(membership_path),
+            "warmup_sessions_before_membership": int(a.membership_warmup_sessions),
+            "membership_aliases_matched": int(len(membership_windows)),
+            "all_history_candidate_gap_pairs": int(candidate_missing_pairs_unfiltered),
+            "pairs_excluded_outside_membership_window": int(excluded_outside_membership_window),
+            "target_inventory_sha256": target_inventory_hash,
+        },
         "minimum_valid_bhavcopy_eq_rows": int(a.min_bhavcopy_eq_rows),
         "workers": int(max(1, min(a.workers, 6))),
         "internal_gap_spans_targeted": int(len(gap_spans)),
@@ -519,13 +639,24 @@ def main():
         "fetch_error_dates": int(len(fetch_errors)),
         "rows_before": int(len(raw_all)),
         "rows_added": int(len(additions)),
+        "eq_rows_added": int(sum(1 for row in additions if str(row.get("series", "EQ")).strip().upper() == "EQ")),
+        "alternate_series_rows_added": int(alternate_series_rows_added),
+        "alternate_series_rows_added_by_series": pd.Series([
+            str(row.get("series", "EQ")).strip().upper()
+            for row in additions if str(row.get("series", "EQ")).strip().upper() in ALTERNATE_PRICE_SERIES
+        ]).value_counts().to_dict(),
         "rows_after": int(len(result)),
         "verified_no_trade_pairs": verified_target_no_trade_pairs,
         "approved_ledger_rows_total": int(len(no_trade_df)),
         "archive_absence_review_pairs": int(len(exception_df)),
         "already_present_alias_matches": int(already_present_alias_matches),
+        "already_present_alternate_series_pairs": int(already_present_alternate_series_pairs),
         "unresolved_target_pairs_due_to_fetch_errors": int(sum(x["target_symbols"] for x in fetch_errors)),
-        "accounted_target_pairs": int(len(additions) + verified_target_no_trade_pairs + already_present_alias_matches + len(exception_df) + sum(x["target_symbols"] for x in fetch_errors)),
+        "accounted_target_pairs": int(
+            len(additions) + verified_target_no_trade_pairs + already_present_alias_matches
+            + already_present_alternate_series_pairs + len(exception_df)
+            + sum(x["target_symbols"] for x in fetch_errors)
+        ),
         "status": ("IN_PROGRESS" if len(completed_date_values) < len(all_days) else ("BLOCKED" if fetch_errors or len(exception_df) else "PASS")),
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
         "archive_symbol_presence_diagnostics": {
@@ -536,14 +667,14 @@ def main():
                 for symbol, series_counts in sorted(non_eq_target_presence_counts.items())
             },
             "non_eq_series_examples": non_eq_target_presence_examples,
-            "interpretation": "Presence counts diagnose archive parsing/matching only; non-EQ rows are not treated as valid EQ prices and no absence is approved as no-trade.",
+            "interpretation": "EQ rows are preferred. Actual BE/BZ closes are retained as alternate-series price observations for continuity without relabeling them as EQ; series eligibility remains a separate execution concern. Other series do not resolve price gaps.",
         },
         "gaps": gap_spans,
         "fetch_errors": fetch_errors,
         "verified_no_trade_ledger": str(nt_path),
         "unresolved_absence_exceptions": str(exceptions_path),
         "approved_no_trade_evidence_fields": ["verification_source", "evidence_reference"],
-        "note": "Only actual NSE EQ bhavcopy observations are added. Absence from a successfully parsed archive remains unresolved pending independent evidence; it is not verified no-trade and is never converted into a synthetic raw price row. Failed archive days also remain unresolved.",
+        "note": "Only actual NSE bhavcopy prices are added. Missing observations are targeted only inside point-in-time Nifty 500 membership intervals plus a 252-session signal warm-up. EQ is preferred; actual BE/BZ closes may be added with their series preserved for price continuity. Unresolved absences are not converted to synthetic prices or no-trade approvals.",
     }
     rp = Path(a.report); rp.parent.mkdir(parents=True, exist_ok=True)
     rp.write_text(json.dumps(report, indent=2, default=str))
