@@ -19,6 +19,7 @@ from scripts.membership_scope import (
     in_membership_research_window,
 )
 from scripts.audit_price_gap_readiness import accounting_summary
+from scripts.run_fluidq_backtest import load_membership, normalize_price_series, eq_tradable_rows
 
 
 class ParseBhavcopyTests(unittest.TestCase):
@@ -139,6 +140,34 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertTrue(in_membership_research_window("OLDABC", 8, windows))
         self.assertFalse(in_membership_research_window("ABC", 2, windows))
         self.assertFalse(in_membership_research_window("ABC", 9, windows))
+
+    def test_backtest_loads_valid_from_valid_to_membership_intervals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "membership.csv"
+            pd.DataFrame([{
+                "symbol": "OLDCO",
+                "canonical_symbol": "NEWCO",
+                "valid_from": "2024-01-02",
+                "valid_to": "2024-02-01",
+            }]).to_csv(path, index=False)
+
+            historical = load_membership(path)
+            self.assertEqual(historical.loc[0, "symbol"], "OLDCO")
+            self.assertEqual(historical.loc[0, "effective_date"], pd.Timestamp("2024-01-02"))
+            self.assertEqual(historical.loc[0, "end_date"], pd.Timestamp("2024-02-01"))
+
+            canonical = load_membership(path, canonical_symbols=True)
+            self.assertEqual(canonical.loc[0, "symbol"], "NEWCO")
+
+    def test_backtest_uses_be_bz_for_price_continuity_but_only_eq_for_new_entries(self):
+        prices = pd.DataFrame({
+            "series": ["EQ", "BE", "BZ", "E1", "SM"],
+            "close": [100.0, 101.0, 99.0, 77.0, 88.0],
+        })
+        continuity = normalize_price_series(prices, "series")
+        self.assertEqual(set(continuity["series"]), {"EQ", "BE", "BZ"})
+        self.assertEqual(len(eq_tradable_rows(continuity)), 1)
+        self.assertEqual(eq_tradable_rows(continuity)["series"].iloc[0], "EQ")
 
     def test_mixed_date_formats_do_not_create_false_duplicate_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
