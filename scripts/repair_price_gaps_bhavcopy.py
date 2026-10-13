@@ -167,6 +167,32 @@ def exchange_symbol(symbol, day, symbol_map):
     return cur
 
 
+def exclude_verified_no_trade_absences(absence_exceptions, verified_pairs):
+    """Remove absences already dispositioned by independently verified no-trade evidence.
+
+    A verified no-trade pair is accounted in its own bucket and must not also
+    remain in the unresolved archive-absence bucket.
+    """
+    verified = set()
+    for day, symbol in verified_pairs:
+        parsed_day = pd.to_datetime(day, errors="coerce", format="mixed")
+        normalized_symbol = str(symbol).strip().upper()
+        if not pd.isna(parsed_day) and normalized_symbol:
+            verified.add((pd.Timestamp(parsed_day).date().isoformat(), normalized_symbol))
+
+    unresolved = []
+    for item in absence_exceptions:
+        parsed_day = pd.to_datetime(item.get("date"), errors="coerce", format="mixed")
+        normalized_symbol = str(item.get("symbol", "")).strip().upper()
+        if pd.isna(parsed_day) or not normalized_symbol:
+            unresolved.append(item)
+            continue
+        key = (pd.Timestamp(parsed_day).date().isoformat(), normalized_symbol)
+        if key not in verified:
+            unresolved.append(item)
+    return unresolved
+
+
 def absences_requiring_replay(absence_exceptions, rename_rows):
     """Return old absence pairs where current lineage changes the exchange ticker."""
     replay = set()
@@ -659,6 +685,12 @@ def main():
             "verification_source", "evidence_reference"
         ])
     no_trade_df = no_trade_df.drop_duplicates(["date", "symbol"])
+    approved_dates = pd.to_datetime(no_trade_df["date"], errors="coerce", format="mixed")
+    approved_symbols = no_trade_df["symbol"].astype(str).str.upper().str.strip()
+    approved_pairs = set(zip(approved_dates, approved_symbols))
+    # Keep disposition buckets disjoint: a reviewed no-trade pair is not also
+    # an unresolved archive absence and therefore must not be double-counted.
+    absence_exceptions = exclude_verified_no_trade_absences(absence_exceptions, approved_pairs)
     exception_df = pd.DataFrame(absence_exceptions, columns=[
         "date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"
     ]).drop_duplicates(["date", "symbol"])
@@ -674,11 +706,6 @@ def main():
         for day, syms in targets_by_date.items()
         for symbol in syms
     }
-    approved_pairs = set()
-    if not no_trade_df.empty:
-        approved_dates = pd.to_datetime(no_trade_df["date"], errors="coerce")
-        approved_symbols = no_trade_df["symbol"].astype(str).str.upper().str.strip()
-        approved_pairs = set(zip(approved_dates, approved_symbols))
     verified_target_no_trade_pairs = int(len(target_pairs_set & approved_pairs))
 
     report = {

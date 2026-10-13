@@ -15,6 +15,7 @@ from scripts.repair_price_gaps_bhavcopy import (
     inventory_attempts_complete,
     exchange_symbol,
     absences_requiring_replay,
+    exclude_verified_no_trade_absences,
 )
 from scripts.membership_scope import (
     build_membership_session_windows,
@@ -78,6 +79,19 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(set(frame["series"]), {"EQ", "BE", "BZ"})
         self.assertEqual(len(frame), 3)
         self.assertEqual(frame.loc[frame["series"].eq("BE"), "close"].iloc[0], 103)
+
+    def test_verified_no_trade_absences_are_not_double_counted(self):
+        absences = [
+            {"date": "2023-10-26", "symbol": "KIRLFER", "status": "unresolved_archive_absence"},
+            {"date": "2023-10-27", "symbol": "KIRLFER", "status": "unresolved_archive_absence"},
+            {"date": "2024-10-28", "symbol": "MAHSCOOTER", "status": "unresolved_archive_absence"},
+        ]
+        verified_pairs = {
+            (pd.Timestamp("2023-10-26"), "KIRLFER"),
+            (pd.Timestamp("2023-10-27"), "KIRLFER"),
+        }
+        remaining = exclude_verified_no_trade_absences(absences, verified_pairs)
+        self.assertEqual([(x["date"], x["symbol"]) for x in remaining], [("2024-10-28", "MAHSCOOTER")])
 
     def test_accounting_includes_unresolved_pairs_without_approving_them(self):
         result = accounting_summary(100, 20, 0, 5, 70, 5)
