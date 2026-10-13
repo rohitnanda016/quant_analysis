@@ -2,6 +2,8 @@ import argparse, json
 from pathlib import Path
 import pandas as pd
 
+PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
+
 p=argparse.ArgumentParser()
 p.add_argument("--prices",required=True)
 p.add_argument("--outdir",default="results/price_quality")
@@ -16,10 +18,10 @@ cols=["canonical_symbol","symbol","series","date","prev_close","open","high","lo
 total=invalid_dates=missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
 extreme_rows=[]; duplicate_examples=[]; seen=set()
 for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_memory=False):
-    # This research dataset is an EQ-share strategy. Other NSE series (BE, SME,
-    # debt, etc.) must not be mixed into the EQ price-quality denominator.
+    # EQ is preferred, but valid BE/BZ closes are still observed market prices.
+    # Their series labels remain intact for separate execution-eligibility checks.
     if "series" in ch.columns:
-        ch=ch[ch["series"].astype(str).str.strip().str.upper().eq("EQ")].copy()
+        ch=ch[ch["series"].astype(str).str.strip().str.upper().isin(PRICE_CONTINUITY_SERIES)].copy()
     if ch.empty:
         continue
     total += len(ch)
@@ -37,6 +39,10 @@ for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_
     canonical=ch["canonical_symbol"].fillna(ch["symbol"]).astype(str).str.strip().str.upper()
     keys=canonical+"|"+ch["date"].astype(str)
     for idx,key in keys.items():
+        # Invalid dates are reported independently; they must not all collapse
+        # into a false duplicate key such as SYMBOL|NaT.
+        if pd.isna(ch.loc[idx, "date"]):
+            continue
         if key in seen:
             duplicates += 1
             if len(duplicate_examples)<10000:
@@ -59,9 +65,12 @@ ext=pd.concat(extreme_rows,ignore_index=True) if extreme_rows else pd.DataFrame(
 extreme=len(ext)
 ext.to_csv(out/"extreme_returns_raw.csv",index=False)
 pd.DataFrame(duplicate_examples,columns=["canonical_symbol","date","symbol","series","close"]).to_csv(out/"duplicate_date_symbol_examples.csv",index=False)
-summary={"rows":total,"series_filter":"EQ only when series column is present","invalid_date_rows":invalid_dates,"missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
+series_counts = {}
+if "series" in ch.columns:
+    series_counts = ch["series"].astype(str).str.strip().str.upper().value_counts().to_dict()
+summary={"rows":total,"series_filter":"EQ, BE and BZ price-continuity observations; original series labels retained","series_counts":series_counts,"invalid_date_rows":invalid_dates,"missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
 "negative_volume":neg_volume,"negative_turnover":neg_turnover,"duplicate_date_symbol":duplicates,
 "duplicate_examples_written":len(duplicate_examples),"extreme_returns_gt_threshold":extreme,"extreme_threshold":a.extreme_pct,
-"note":"Quality checks are scoped to EQ observations for this equity strategy. Mixed date formats are parsed explicitly; invalid dates are counted separately and excluded from duplicate-key counting. Duplicate keys are canonical_symbol + date across the entire file, including chunk boundaries. Extreme-return detection uses NSE Prev Close; it is diagnostic, not evidence of a corporate action."}
+"note":"Price-quality checks cover EQ/BE/BZ observations. Mixed date formats are parsed explicitly; invalid dates are counted separately and excluded from duplicate-key counting. Duplicate keys are canonical_symbol + date across the entire file, including chunk boundaries. BE/BZ price observations are not relabeled as EQ; execution eligibility must be handled separately. Extreme-return detection uses NSE Prev Close; it is diagnostic, not evidence of a corporate action."}
 (out/"price_quality_summary.json").write_text(json.dumps(summary,indent=2))
 print(json.dumps(summary,indent=2))
