@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Backfill long internal NSE price gaps from official daily bhavcopy archives.
+"""Backfill in-scope gaps using actual NSE EQ, BE or BZ price observations.
 
-Only exact EQ observations from an official archive are inserted. Date normalization and quality validation are handled explicitly downstream. A symbol/date
-pair absent from a successfully parsed archive is recorded as unresolved until
-independent listing/suspension evidence is supplied. It is never written as a
-synthetic raw price or automatically approved as a no-trade day.
+EQ observations are preferred; BE/BZ rows retain their original series for price
+continuity and execution-eligibility checks. A pair without a usable price row
+remains unresolved until independent listing/suspension evidence is supplied.
+No synthetic raw prices or automatically approved no-trade days are created.
 """
 import argparse
 import hashlib
@@ -68,6 +68,11 @@ def checkpoint_matches(checkpoint, start, end, target_pairs, total_dates,
     if target_inventory_hash is not None:
         matches = matches and checkpoint.get("target_inventory_sha256") == str(target_inventory_hash)
     return matches
+
+
+def inventory_attempts_complete(attempted_date_values, total_dates):
+    """A batch scan is complete once every target date was attempted, even if some failed."""
+    return len(set(attempted_date_values)) >= int(total_dates)
 
 
 def target_inventory_fingerprint(targets_by_date):
@@ -308,6 +313,7 @@ def main():
 
     completed = 0
     completed_date_values = set()
+    attempted_date_values = set()
     run_started = time.monotonic()
     checkpoint_path = Path(a.report).with_name("bhavcopy_repair_checkpoint.json")
     additions_path = checkpoint_path.with_name("bhavcopy_repair_additions.csv")
@@ -317,10 +323,13 @@ def main():
     if a.resume and checkpoint_path.exists():
         prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         expected_pairs = int(sum(len(symbols) for symbols in targets_by_date.values()))
-        if not checkpoint_matches(
-            prior, start, end, expected_pairs, len(all_days),
-            warmup_sessions=a.membership_warmup_sessions,
-            target_inventory_hash=target_inventory_hash,
+        if (
+            not checkpoint_matches(
+                prior, start, end, expected_pairs, len(all_days),
+                warmup_sessions=a.membership_warmup_sessions,
+                target_inventory_hash=target_inventory_hash,
+            )
+            or "attempted_date_values" not in prior
         ):
             # Membership scoping changes the inventory materially. Never mix
             # additions/absence rows from the old all-history inventory with
@@ -334,7 +343,8 @@ def main():
                 stale_path.unlink(missing_ok=True)
         else:
             completed_date_values = set(prior.get("completed_date_values", []))
-            completed = len(completed_date_values)
+            attempted_date_values = set(prior.get("attempted_date_values", []))
+            completed = len(attempted_date_values)
             if additions_path.exists() and additions_path.stat().st_size:
                 additions = pd.read_csv(additions_path, low_memory=False).to_dict("records")
             if absences_path.exists() and absences_path.stat().st_size:
@@ -358,14 +368,16 @@ def main():
     def write_checkpoint():
         # Small, durable progress record so a runner interruption is diagnosable.
         checkpoint = {
-            "status": "complete" if len(completed_date_values) == len(all_days) else "in_progress",
+            "status": "complete" if inventory_attempts_complete(attempted_date_values, len(all_days)) else "in_progress",
             "completed_dates": int(len(completed_date_values)),
+            "attempted_dates": int(len(attempted_date_values)),
             "total_dates": int(len(all_days)),
             "date_start": str(start.date()),
             "date_end": str(end.date()),
             "membership_warmup_sessions": int(a.membership_warmup_sessions),
             "target_inventory_sha256": target_inventory_hash,
             "completed_date_values": sorted(completed_date_values),
+            "attempted_date_values": sorted(attempted_date_values),
             "targeted_gap_spans": int(len(gap_spans)),
             "target_symbol_date_pairs": int(sum(len(symbols) for symbols in targets_by_date.values())),
             "fetched_dates": int(fetched_days),
@@ -395,7 +407,7 @@ def main():
         temp_path.replace(checkpoint_path)
 
     with ThreadPoolExecutor(max_workers=max(1, min(a.workers, 6))) as pool:
-        pending_days = [day for day in all_days if pd.Timestamp(day).date().isoformat() not in completed_date_values]
+        pending_days = [day for day in all_days if pd.Timestamp(day).date().isoformat() not in attempted_date_values]
         if a.max_dates > 0:
             pending_days = pending_days[:a.max_dates]
         futures = {pool.submit(fetch_day, day): day for day in pending_days}
@@ -409,7 +421,9 @@ def main():
                 parsed_all = None
                 err = f"{type(exc).__name__}: {str(exc)[:220]}"
 
+            attempted_date_values.add(day.date().isoformat())
             if err is not None or parsed is None:
+                fetch_errors = [item for item in fetch_errors if item.get("date") != day.date().isoformat()]
                 fetch_errors.append({
                     "date": day.date().isoformat(),
                     "error": str(err or "empty_archive"),
@@ -657,7 +671,7 @@ def main():
             + already_present_alternate_series_pairs + len(exception_df)
             + sum(x["target_symbols"] for x in fetch_errors)
         ),
-        "status": ("IN_PROGRESS" if len(completed_date_values) < len(all_days) else ("BLOCKED" if fetch_errors or len(exception_df) else "PASS")),
+        "status": ("IN_PROGRESS" if not inventory_attempts_complete(attempted_date_values, len(all_days)) else ("BLOCKED" if fetch_errors or len(exception_df) else "PASS")),
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
         "archive_symbol_presence_diagnostics": {
             "benchmark_presence_counts": benchmark_presence_counts,
