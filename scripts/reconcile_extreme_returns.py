@@ -2,6 +2,11 @@ import argparse, json, re
 from pathlib import Path
 import pandas as pd
 
+try:
+    from scripts.symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+except ModuleNotFoundError:
+    from symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+
 def parse_factor(purpose):
     p = str(purpose or "").upper()
     factors = []
@@ -57,18 +62,11 @@ def classify_event(purpose, action_type):
         return "DIVIDEND"
     return "OTHER_CORPORATE_ACTION"
 
-def aliases(path):
-    if not Path(path).exists():
+def aliases(path, supplement):
+    base = path if path and Path(path).exists() else None
+    if not base and not Path(supplement).exists():
         return {}
-    m = pd.read_csv(path)
-    out = {}
-    for _, r in m.iterrows():
-        old = str(r.get("old_symbol", "")).strip().upper()
-        new = str(r.get("new_symbol", "")).strip().upper()
-        if old and new and old != "NAN" and new != "NAN":
-            out[old] = new
-            out[new] = new
-    return out
+    return terminal_symbol_aliases(load_symbol_rename_rows(base, supplement))
 
 def first_existing_series(df, names):
     for name in names:
@@ -80,6 +78,7 @@ p = argparse.ArgumentParser()
 p.add_argument("--extremes", required=True)
 p.add_argument("--actions", required=True)
 p.add_argument("--symbol-map", required=False, default="")
+p.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
 p.add_argument("--out", required=True)
 p.add_argument("--supplemental-actions", default="data/input/verified_manual_corporate_actions.csv")
 a = p.parse_args()
@@ -105,7 +104,7 @@ ca["purpose"] = first_existing_series(ca, ["purpose", "subject"])
 ca[["inferred_factor", "action_type"]] = ca["purpose"].apply(lambda x: pd.Series(parse_factor(x)))
 ca["event_class"] = ca.apply(lambda r: classify_event(r["purpose"], r["action_type"]), axis=1)
 
-amap = aliases(a.symbol_map)
+amap = aliases(a.symbol_map, a.symbol_map_supplement)
 e["lookup_symbol"] = e["symbol"].map(lambda x: amap.get(x, x))
 ca["lookup_symbol"] = ca["symbol"].map(lambda x: amap.get(x, x))
 
