@@ -162,6 +162,7 @@ class ParseBhavcopyTests(unittest.TestCase):
                 {"old_symbol": "PIPAVAVDOC", "new_symbol": "RDEL", "effective_from": "2016-03-18"},
                 {"old_symbol": "RDEL", "new_symbol": "RNAVAL", "effective_from": "2017-09-18"},
                 {"old_symbol": "STRTECH", "new_symbol": "STLTECH", "effective_from": "2020-10-29"},
+                {"old_symbol": "JUBILANT", "new_symbol": "JUBLPHARMA", "effective_from": "2021-02-12"},
                 {"old_symbol": "RNAVAL", "new_symbol": "SWANDEF", "effective_from": "2025-01-20"},
             ]).to_csv(supplement, index=False)
             rows = load_symbol_rename_rows(base, supplement)
@@ -172,6 +173,7 @@ class ParseBhavcopyTests(unittest.TestCase):
             self.assertEqual(exchange_symbol("RNAVAL", "2014-06-16", rows), "PIPAVAVDOC")
             self.assertEqual(exchange_symbol("RNAVAL", "2016-06-15", rows), "RDEL")
             self.assertEqual(exchange_symbol("STLTECH", "2016-06-15", rows), "STRTECH")
+            self.assertEqual(exchange_symbol("JUBLPHARMA", "2021-02-04", rows), "JUBILANT")
             self.assertEqual(exchange_symbol("RNAVAL", "2026-04-20", rows), "SWANDEF")
             self.assertEqual(len(symbol_map_fingerprint(rows)), 64)
 
@@ -181,6 +183,7 @@ class ParseBhavcopyTests(unittest.TestCase):
                 {"date": "2014-06-16", "symbol": "RTNPOWER", "exchange_symbol_checked": "RTNPOWER"},
                 {"date": "2014-06-16", "symbol": "RNAVAL", "exchange_symbol_checked": "RNAVAL"},
                 {"date": "2016-06-15", "symbol": "STLTECH", "exchange_symbol_checked": "STLTECH"},
+                {"date": "2021-02-04", "symbol": "JUBLPHARMA", "exchange_symbol_checked": "JUBLPHARMA"},
             ]
             self.assertEqual(
                 absences_requiring_replay(prior_absences, rows),
@@ -190,6 +193,7 @@ class ParseBhavcopyTests(unittest.TestCase):
                     ("2014-06-16", "RTNPOWER"),
                     ("2014-06-16", "RNAVAL"),
                     ("2016-06-15", "STLTECH"),
+                    ("2021-02-04", "JUBLPHARMA"),
                 },
             )
 
