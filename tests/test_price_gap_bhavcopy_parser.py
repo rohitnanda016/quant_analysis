@@ -12,6 +12,7 @@ from scripts.repair_price_gaps_bhavcopy import (
     parse_archive,
     checkpoint_matches,
     target_inventory_fingerprint,
+    inventory_attempts_complete,
 )
 from scripts.membership_scope import (
     build_membership_session_windows,
@@ -116,6 +117,13 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertFalse(checkpoint_matches(
             checkpoint, "2014-01-01", "2026-08-31", 42628, 2892, 252, "different"
         ))
+
+    def test_batch_completes_after_every_date_is_attempted_even_with_failures(self):
+        self.assertFalse(inventory_attempts_complete({"2024-01-01"}, 3))
+        self.assertTrue(inventory_attempts_complete({"2024-01-01", "2024-01-02", "2024-01-03"}, 3))
+        # Failed dates are attempted too; readiness will report their fetch errors.
+        attempted = {"2024-01-01", "2024-01-02"}
+        self.assertTrue(inventory_attempts_complete(attempted, 2))
 
     def test_membership_scope_includes_signal_warmup_and_exit_session(self):
         calendar = pd.date_range("2024-01-01", periods=12, freq="D")
