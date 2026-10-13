@@ -1,4 +1,9 @@
 old_symbol,new_symbol,effective_from,source_url,notes
+IBPOW,RTNPOWER,2014-11-20,https://www.rattanindiapower.com/wp-content/uploads/2016/02/RPL_AR-Final.compressed.pdf,"Historical issuer annual report and symbol records support IBPOW to RTNPOWER effective 2014-11-20"
+PIPAVAVDOC,RDEL,2016-03-18,https://www.msei.in/SX-Content/Circulars/2016/March/Circular-3951.pdf,"MSEI circular documents PIPAVAVDOC to RDEL effective 2016-03-18"
+RDEL,RNAVAL,2017-09-18,https://download.latinmanharlal.com/downloads/LM-SPAN-MARGIN/2019/OLD_Circulars/Change%20in%20Underlying%20Name%20%26%20Symbol.pdf,"NSE/FAOP/35792 symbol change RDEL to RNAVAL effective 2017-09-18"
 SORILHOLD,IBULISL,2018-06-08,https://bsmedia.business-standard.com/_media/bs/data/announcements/bse/05092018/c56ac19a-632e-47a6-88bc-55d77bbd2401.pdf,"Historical annual report cites NSE approval for symbol change effective 2018-06-08"
 IBVENTURES,DHANI,2020-10-28,https://www.steelcitynettrade.com/Circulars/Change%20in%20Name%20and%20Symbol%20of%20Indiabulls%20Ventures.pdf,"NSE/CML/46118; exchange symbol change effective 2020-10-28"
+STRTECH,STLTECH,2020-10-29,https://www.msei.in/SX-Content/Circulars/2020/October/Circular-9646.pdf,"MSEI circular documents STRTECH to STLTECH effective 2020-10-29"
 RUCHI,PATANJALI,2022-07-13,https://archives.nseindia.com/content/circulars/CML52890.pdf,"NSE/CML/52890; exchange symbol change effective 2022-07-13"
+RNAVAL,SWANDEF,2025-01-20,https://nsearchives.nseindia.com/content/circulars/CML66138.pdf,"NSE/CML/66138 symbol/name change RNAVAL to SWANDEF effective 2025-01-20"

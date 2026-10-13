@@ -158,21 +158,39 @@ class ParseBhavcopyTests(unittest.TestCase):
                 {"old_symbol": "IBVENTURES", "new_symbol": "DHANI", "effective_from": "2020-10-28"},
                 {"old_symbol": "RUCHI", "new_symbol": "PATANJALI", "effective_from": "2022-07-13"},
                 {"old_symbol": "SORILHOLD", "new_symbol": "IBULISL", "effective_from": "2018-06-08"},
+                {"old_symbol": "IBPOW", "new_symbol": "RTNPOWER", "effective_from": "2014-11-20"},
+                {"old_symbol": "PIPAVAVDOC", "new_symbol": "RDEL", "effective_from": "2016-03-18"},
+                {"old_symbol": "RDEL", "new_symbol": "RNAVAL", "effective_from": "2017-09-18"},
+                {"old_symbol": "STRTECH", "new_symbol": "STLTECH", "effective_from": "2020-10-29"},
+                {"old_symbol": "RNAVAL", "new_symbol": "SWANDEF", "effective_from": "2025-01-20"},
             ]).to_csv(supplement, index=False)
             rows = load_symbol_rename_rows(base, supplement)
             self.assertEqual(exchange_symbol("DHANI", "2018-06-13", rows), "IBVENTURES")
             self.assertEqual(exchange_symbol("PATANJALI", "2022-03-01", rows), "RUCHI")
             self.assertEqual(exchange_symbol("IBULISL", "2018-05-08", rows), "SORILHOLD")
+            self.assertEqual(exchange_symbol("RTNPOWER", "2014-06-13", rows), "IBPOW")
+            self.assertEqual(exchange_symbol("RNAVAL", "2014-06-16", rows), "PIPAVAVDOC")
+            self.assertEqual(exchange_symbol("RNAVAL", "2016-06-15", rows), "RDEL")
+            self.assertEqual(exchange_symbol("STLTECH", "2016-06-15", rows), "STRTECH")
+            self.assertEqual(exchange_symbol("RNAVAL", "2026-04-20", rows), "SWANDEF")
             self.assertEqual(len(symbol_map_fingerprint(rows)), 64)
 
             prior_absences = [
                 {"date": "2018-06-13", "symbol": "DHANI", "exchange_symbol_checked": "DHANI"},
                 {"date": "2022-03-01", "symbol": "PATANJALI", "exchange_symbol_checked": "PATANJALI"},
                 {"date": "2014-06-16", "symbol": "RTNPOWER", "exchange_symbol_checked": "RTNPOWER"},
+                {"date": "2014-06-16", "symbol": "RNAVAL", "exchange_symbol_checked": "RNAVAL"},
+                {"date": "2016-06-15", "symbol": "STLTECH", "exchange_symbol_checked": "STLTECH"},
             ]
             self.assertEqual(
                 absences_requiring_replay(prior_absences, rows),
-                {("2018-06-13", "DHANI"), ("2022-03-01", "PATANJALI")},
+                {
+                    ("2018-06-13", "DHANI"),
+                    ("2022-03-01", "PATANJALI"),
+                    ("2014-06-16", "RTNPOWER"),
+                    ("2014-06-16", "RNAVAL"),
+                    ("2016-06-15", "STLTECH"),
+                },
             )
 
     def test_price_identity_prefers_requested_symbol_for_repaired_old_ticker(self):

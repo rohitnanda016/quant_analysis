@@ -7,6 +7,8 @@ on:
     branches: [v1.2-factor-attribution]
     paths:
       - ".github/workflows/fluidq-symbol-lineage-replay.yml"
+      - "data/reference/nse_historical_symbol_changes.csv"
+      - "data/reference/verified_no_trade_evidence.csv"
   workflow_dispatch:
 
 permissions:
@@ -126,6 +128,7 @@ jobs:
           cp repair_checkpoint/bhavcopy_repair_checkpoint.json results/price_quality/
           cp repair_checkpoint/bhavcopy_repair_additions.csv results/price_quality/
           cp repair_checkpoint/bhavcopy_repair_absences.csv results/price_quality/
+          cp data/reference/verified_no_trade_evidence.csv data/input/verified_no_trade_dates.csv
 
       - name: Replay unresolved pairs affected by verified ticker changes
         id: lineage_repair
