@@ -167,6 +167,21 @@ def exchange_symbol(symbol, day, symbol_map):
     return cur
 
 
+def absences_requiring_replay(absence_exceptions, rename_rows):
+    """Return old absence pairs where current lineage changes the exchange ticker."""
+    replay = set()
+    for item in absence_exceptions:
+        day_value = pd.to_datetime(item.get("date"), errors="coerce", format="mixed")
+        symbol_value = str(item.get("symbol", "")).strip().upper()
+        if pd.isna(day_value) or not symbol_value:
+            continue
+        mapped = exchange_symbol(symbol_value, day_value, rename_rows)
+        checked = str(item.get("exchange_symbol_checked", "")).strip().upper()
+        if mapped != checked:
+            replay.add((pd.Timestamp(day_value).date().isoformat(), symbol_value))
+    return replay
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
@@ -374,17 +389,10 @@ def main():
             # Revisit only dates containing an absence whose exchange ticker has
             # changed; keep all successful observations and other exceptions.
             previous_map_hash = prior.get("symbol_map_sha256")
-            replay_pairs = set()
-            if previous_map_hash != symbol_map_hash:
-                for item in absence_exceptions:
-                    day_value = pd.to_datetime(item.get("date"), errors="coerce", format="mixed")
-                    symbol_value = str(item.get("symbol", "")).strip().upper()
-                    if pd.isna(day_value) or not symbol_value:
-                        continue
-                    mapped = exchange_symbol(symbol_value, day_value, rename_rows)
-                    checked = str(item.get("exchange_symbol_checked", "")).strip().upper()
-                    if mapped != checked:
-                        replay_pairs.add((pd.Timestamp(day_value).date().isoformat(), symbol_value))
+            replay_pairs = (
+                absences_requiring_replay(absence_exceptions, rename_rows)
+                if previous_map_hash != symbol_map_hash else set()
+            )
             if replay_pairs:
                 replay_days = {day for day, _ in replay_pairs}
                 old_count = len(absence_exceptions)
