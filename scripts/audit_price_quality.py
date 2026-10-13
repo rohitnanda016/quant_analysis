@@ -15,7 +15,7 @@ out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 def num(s):
     return pd.to_numeric(s.astype(str).str.replace(",","",regex=False).str.replace("₹","",regex=False).str.strip(),errors="coerce")
 
-cols=["canonical_symbol","symbol","series","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
+cols=["canonical_symbol","requested_symbol","symbol","series","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
 total=invalid_dates=missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
 extreme_rows=[]; duplicate_examples=[]; seen=set(); series_counts=Counter()
 for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_memory=False):
@@ -28,7 +28,20 @@ for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_
     if "series" in ch.columns:
         series_counts.update(ch["series"].astype(str).str.strip().str.upper().value_counts().to_dict())
     total += len(ch)
-    if "canonical_symbol" not in ch.columns: ch["canonical_symbol"]=ch["symbol"]
+    # Use the stable strategy/request key for archive-repaired rows whose
+    # historical exchange ticker differs from the modern universe ticker.
+    raw_symbol = ch["symbol"].astype("string").str.strip()
+    requested_symbol = (
+        ch["requested_symbol"].astype("string").str.strip()
+        if "requested_symbol" in ch.columns else pd.Series(pd.NA, index=ch.index, dtype="string")
+    )
+    if "canonical_symbol" in ch.columns:
+        canonical = ch["canonical_symbol"].astype("string").str.strip()
+    else:
+        canonical = pd.Series(pd.NA, index=ch.index, dtype="string")
+    canonical = canonical.where(canonical.notna() & canonical.ne("") & ~canonical.str.lower().isin(["nan", "none", "<na>"]), requested_symbol)
+    canonical = canonical.where(canonical.notna() & canonical.ne("") & ~canonical.str.lower().isin(["nan", "none", "<na>"]), raw_symbol)
+    ch["canonical_symbol"] = canonical
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce",format="mixed")
     invalid_dates += int(ch["date"].isna().sum())
     if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns: ch["turnover_₹"]=ch["turnover ₹"]
