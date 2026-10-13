@@ -62,10 +62,10 @@ class ParseBhavcopyTests(unittest.TestCase):
     def test_alternate_series_rows_are_preserved_for_price_continuity(self):
         csv = (
             "SYMBOL,SERIES,DATE,PREV_CLOSE,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,"
-            "LAST_PRICE,CLOSE_PRICE,AVG_PRICE,TTL_TRD_QNTY,TURNOVER_LACS,NO_OF_TRADES\\n"
-            "AARTIIND,EQ,03-Jul-2019,100,100,103,99,102,102,101,1000,1,10\\n"
-            "AARTIIND,BE,04-Jul-2019,102,102,104,101,103,103,103,800,0.8,8\\n"
-            "AARTIIND,BZ,05-Jul-2019,103,103,104,102,103,103,103,500,0.5,5\\n"
+            "LAST_PRICE,CLOSE_PRICE,AVG_PRICE,TTL_TRD_QNTY,TURNOVER_LACS,NO_OF_TRADES\n"
+            "AARTIIND,EQ,03-Jul-2019,100,100,103,99,102,102,101,1000,1,10\n"
+            "AARTIIND,BE,04-Jul-2019,102,102,104,101,103,103,103,800,0.8,8\n"
+            "AARTIIND,BZ,05-Jul-2019,103,103,104,102,103,103,103,500,0.5,5\n"
         )
         frame = parse_archive(csv, date(2019, 7, 4), filter_eq=False)
         self.assertEqual(set(frame["series"]), {"EQ", "BE", "BZ"})
