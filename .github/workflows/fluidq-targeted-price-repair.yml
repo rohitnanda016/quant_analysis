@@ -31,7 +31,7 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   repair-and-rebuild:
@@ -63,17 +63,17 @@ jobs:
           cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
 
       - name: Restore prior repair checkpoint
-        if: ${{ inputs.checkpoint_run_id != '' }}
+        if: ${{ inputs.checkpoint_run_id != '' || github.event_name == 'push' }}
         uses: actions/download-artifact@v5
         continue-on-error: true
         with:
-          name: fluidq-price-repair-checkpoint-${{ inputs.checkpoint_run_id }}
+          name: fluidq-price-repair-checkpoint-${{ inputs.checkpoint_run_id || (github.event_name == 'push' && '38348992056') }}
           path: repair_checkpoint
-          run-id: ${{ inputs.checkpoint_run_id }}
+          run-id: ${{ inputs.checkpoint_run_id || (github.event_name == 'push' && '38348992056') }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install restored checkpoint files
-        if: ${{ inputs.checkpoint_run_id != '' }}
+        if: ${{ inputs.checkpoint_run_id != '' || github.event_name == 'push' }}
         run: |
           if [ -d repair_checkpoint ]; then
             cp -n repair_checkpoint/bhavcopy_repair_checkpoint.json results/price_quality/ 2>/dev/null || true
@@ -178,6 +178,20 @@ jobs:
             --post-adjustment-summary results/price_quality/post_adjustment/post_adjustment_summary.json \
             --symbol-map data/input/verified_symbol_map.csv \
             --report results/price_quality/price_gap_readiness.json
+
+      - name: Dispatch next repair batch when checkpoint is incomplete
+        if: ${{ always() && steps.checkpoint_state.outputs.complete != 'true' && hashFiles('results/price_quality/bhavcopy_repair_checkpoint.json') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN_ID: ${{ github.run_id }}
+        run: |
+          payload=$(python -c 'import json,os; print(json.dumps({"ref":"v1.2-factor-attribution","inputs":{"base_run_id":"36875371038","checkpoint_run_id":os.environ["CHECKPOINT_RUN_ID"],"batch_size":"600"}}))')
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/rohitnanda016/quant_analysis/actions/workflows/fluidq-targeted-price-repair.yml/dispatches \
+            -d "$payload"
 
       - name: Upload diagnostic artifact even when a gate fails
         if: always()
