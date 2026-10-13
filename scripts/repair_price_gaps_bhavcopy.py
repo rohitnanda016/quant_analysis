@@ -147,6 +147,7 @@ def main():
     ap.add_argument("--workers", type=int, default=3, help="Concurrent source sessions; keep modest to avoid excessive exchange requests.")
     ap.add_argument("--min-bhavcopy-eq-rows", type=int, default=500, help="Reject partial/invalid archives rather than using them as no-trade evidence.")
     ap.add_argument("--resume", action="store_true", help="Resume from a validated local repair checkpoint.")
+    ap.add_argument("--max-dates", type=int, default=0, help="Maximum archive dates to process this run; 0 processes all pending dates.")
     a = ap.parse_args()
 
     src = Path(a.prices)
@@ -277,8 +278,8 @@ def main():
     def write_checkpoint():
         # Small, durable progress record so a runner interruption is diagnosable.
         checkpoint = {
-            "status": "in_progress",
-            "completed_dates": int(completed),
+            "status": "complete" if len(completed_date_values) == len(all_days) else "in_progress",
+            "completed_dates": int(len(completed_date_values)),
             "total_dates": int(len(all_days)),
             "date_start": str(start.date()),
             "date_end": str(end.date()),
@@ -310,6 +311,8 @@ def main():
 
     with ThreadPoolExecutor(max_workers=max(1, min(a.workers, 6))) as pool:
         pending_days = [day for day in all_days if pd.Timestamp(day).date().isoformat() not in completed_date_values]
+        if a.max_dates > 0:
+            pending_days = pending_days[:a.max_dates]
         futures = {pool.submit(fetch_day, day): day for day in pending_days}
         for future in as_completed(futures):
             day = pd.Timestamp(futures[future])
@@ -429,8 +432,12 @@ def main():
                     f"errors={len(fetch_errors)}; elapsed_s={elapsed:.0f}; rate_dates_s={rate:.3f}",
                     flush=True,
                 )
-            if completed % 100 == 0 or completed == len(all_days):
+            if completed % 100 == 0:
                 write_checkpoint()
+
+    # Always persist the final state of this batch, including short batches and
+    # inventories that did not land exactly on a 100-date boundary.
+    write_checkpoint()
 
     # Keep raw rows as downloaded; no-trade marks are stored separately and
     # may only be used by the backtest to carry forward a mark, never as prices.
@@ -515,7 +522,7 @@ def main():
         "already_present_alias_matches": int(already_present_alias_matches),
         "unresolved_target_pairs_due_to_fetch_errors": int(sum(x["target_symbols"] for x in fetch_errors)),
         "accounted_target_pairs": int(len(additions) + verified_target_no_trade_pairs + already_present_alias_matches + len(exception_df) + sum(x["target_symbols"] for x in fetch_errors)),
-        "status": "BLOCKED" if fetch_errors or len(exception_df) else "PASS",
+        "status": ("IN_PROGRESS" if len(completed_date_values) < len(all_days) else ("BLOCKED" if fetch_errors or len(exception_df) else "PASS")),
         "top_added_symbols": pd.Series([str(x.get("requested_symbol", x.get("symbol", ""))) for x in additions]).value_counts().head(30).to_dict(),
         "archive_symbol_presence_diagnostics": {
             "benchmark_presence_counts": benchmark_presence_counts,
