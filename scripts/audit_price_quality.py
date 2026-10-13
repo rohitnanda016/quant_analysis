@@ -12,11 +12,16 @@ out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
 def num(s):
     return pd.to_numeric(s.astype(str).str.replace(",","",regex=False).str.replace("₹","",regex=False).str.strip(),errors="coerce")
 
-cols=["canonical_symbol","symbol","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
-total=0; missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
-extreme_rows=[]; seen=set()
-
-for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols or c=="turnover_₹",chunksize=250000,low_memory=False):
+cols=["canonical_symbol","symbol","series","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
+total=missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
+extreme_rows=[]; duplicate_examples=[]; seen=set()
+for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_memory=False):
+    # This research dataset is an EQ-share strategy. Other NSE series (BE, SME,
+    # debt, etc.) must not be mixed into the EQ price-quality denominator.
+    if "series" in ch.columns:
+        ch=ch[ch["series"].astype(str).str.strip().str.upper().eq("EQ")].copy()
+    if ch.empty:
+        continue
     total += len(ch)
     if "canonical_symbol" not in ch.columns: ch["canonical_symbol"]=ch["symbol"]
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
@@ -28,21 +33,34 @@ for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols or c=="turnover_₹",
     ohlc_order += int(((ch["high"]<ch["low"])|(ch["high"]<ch["open"])|(ch["high"]<ch["close"])|(ch["low"]>ch["open"])|(ch["low"]>ch["close"])).sum())
     neg_volume += int((ch["volume"]<0).sum())
     neg_turnover += int((ch["turnover_₹"]<0).sum())
-    keys=ch["canonical_symbol"].astype(str)+"|"+ch["date"].astype(str)
-    duplicates += int(keys.duplicated().sum())
+    canonical=ch["canonical_symbol"].fillna(ch["symbol"]).astype(str).str.strip().str.upper()
+    keys=canonical+"|"+ch["date"].astype(str)
+    for idx,key in keys.items():
+        if key in seen:
+            duplicates += 1
+            if len(duplicate_examples)<10000:
+                duplicate_examples.append({
+                    "canonical_symbol": canonical.loc[idx], "date": str(ch.loc[idx,"date"]),
+                    "symbol": str(ch.loc[idx,"symbol"]),
+                    "series": str(ch.loc[idx,"series"]) if "series" in ch.columns else "",
+                    "close": ch.loc[idx,"close"] if "close" in ch.columns else None,
+                })
+        else:
+            seen.add(key)
     denom=ch["prev_close"].abs()
     ret=(ch["close"]/ch["prev_close"]-1).where(denom>0)
-    ex=ch.loc[ret.abs()>a.extreme_pct,["canonical_symbol","date","prev_close","close"]].copy()
+    ex=ch.loc[ret.abs()>a.extreme_pct,["canonical_symbol","symbol","date","prev_close","close"]].copy()
     if len(ex):
         ex["return"]=ret.loc[ex.index]
         extreme_rows.append(ex)
 
-ext=pd.concat(extreme_rows,ignore_index=True) if extreme_rows else pd.DataFrame(columns=["canonical_symbol","date","prev_close","close","return"])
+ext=pd.concat(extreme_rows,ignore_index=True) if extreme_rows else pd.DataFrame(columns=["canonical_symbol","symbol","date","prev_close","close","return"])
 extreme=len(ext)
 ext.to_csv(out/"extreme_returns_raw.csv",index=False)
-summary={"rows":total,"missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
+pd.DataFrame(duplicate_examples,columns=["canonical_symbol","date","symbol","series","close"]).to_csv(out/"duplicate_date_symbol_examples.csv",index=False)
+summary={"rows":total,"series_filter":"EQ only when series column is present","missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
 "negative_volume":neg_volume,"negative_turnover":neg_turnover,"duplicate_date_symbol":duplicates,
-"extreme_returns_gt_threshold":extreme,"extreme_threshold":a.extreme_pct,
-"note":"Extreme-return detection uses NSE Prev Close. It is a diagnostic, not evidence of a corporate action."}
+"duplicate_examples_written":len(duplicate_examples),"extreme_returns_gt_threshold":extreme,"extreme_threshold":a.extreme_pct,
+"note":"Quality checks are scoped to EQ observations for this equity strategy. Duplicate keys are canonical_symbol + date across the entire file, including chunk boundaries. Extreme-return detection uses NSE Prev Close; it is diagnostic, not evidence of a corporate action."}
 (out/"price_quality_summary.json").write_text(json.dumps(summary,indent=2))
 print(json.dumps(summary,indent=2))
