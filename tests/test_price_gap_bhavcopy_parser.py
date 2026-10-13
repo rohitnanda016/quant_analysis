@@ -13,13 +13,18 @@ from scripts.repair_price_gaps_bhavcopy import (
     checkpoint_matches,
     target_inventory_fingerprint,
     inventory_attempts_complete,
+    exchange_symbol,
+    absences_requiring_replay,
 )
 from scripts.membership_scope import (
     build_membership_session_windows,
     in_membership_research_window,
 )
 from scripts.audit_price_gap_readiness import accounting_summary
-from scripts.run_fluidq_backtest import load_membership, normalize_price_series, eq_tradable_rows
+from scripts.run_fluidq_backtest import (
+    load_membership, normalize_price_series, eq_tradable_rows, prepare_price_identity,
+)
+from scripts.symbol_lineage import load_symbol_rename_rows, symbol_map_fingerprint
 
 
 class ParseBhavcopyTests(unittest.TestCase):
@@ -140,6 +145,56 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertTrue(in_membership_research_window("OLDABC", 8, windows))
         self.assertFalse(in_membership_research_window("ABC", 2, windows))
         self.assertFalse(in_membership_research_window("ABC", 9, windows))
+
+    def test_historical_symbol_supplement_repairs_known_renames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base.csv"
+            supplement = root / "supplement.csv"
+            pd.DataFrame([{
+                "old_symbol": "IBSEC", "new_symbol": "IBVENTURES", "effective_from": "2015-04-01"
+            }]).to_csv(base, index=False)
+            pd.DataFrame([
+                {"old_symbol": "IBVENTURES", "new_symbol": "DHANI", "effective_from": "2020-10-28"},
+                {"old_symbol": "RUCHI", "new_symbol": "PATANJALI", "effective_from": "2022-07-13"},
+                {"old_symbol": "SORILHOLD", "new_symbol": "IBULISL", "effective_from": "2018-06-08"},
+            ]).to_csv(supplement, index=False)
+            rows = load_symbol_rename_rows(base, supplement)
+            self.assertEqual(exchange_symbol("DHANI", "2018-06-13", rows), "IBVENTURES")
+            self.assertEqual(exchange_symbol("PATANJALI", "2022-03-01", rows), "RUCHI")
+            self.assertEqual(exchange_symbol("IBULISL", "2018-05-08", rows), "SORILHOLD")
+            self.assertEqual(len(symbol_map_fingerprint(rows)), 64)
+
+            prior_absences = [
+                {"date": "2018-06-13", "symbol": "DHANI", "exchange_symbol_checked": "DHANI"},
+                {"date": "2022-03-01", "symbol": "PATANJALI", "exchange_symbol_checked": "PATANJALI"},
+                {"date": "2014-06-16", "symbol": "RTNPOWER", "exchange_symbol_checked": "RTNPOWER"},
+            ]
+            self.assertEqual(
+                absences_requiring_replay(prior_absences, rows),
+                {("2018-06-13", "DHANI"), ("2022-03-01", "PATANJALI")},
+            )
+
+    def test_price_identity_prefers_requested_symbol_for_repaired_old_ticker(self):
+        frame = pd.DataFrame({
+            "symbol": ["IBVENTURES", "DHANI"],
+            "requested_symbol": ["DHANI", "DHANI"],
+            "series": ["EQ", "EQ"],
+            "close": [100.0, 110.0],
+        })
+        frame, identity_col, use_canonical = prepare_price_identity(frame)
+        self.assertFalse(use_canonical)
+        self.assertEqual(frame[identity_col].tolist(), ["DHANI", "DHANI"])
+
+        canonical = pd.DataFrame({
+            "symbol": ["IBVENTURES", "DHANI"],
+            "requested_symbol": ["DHANI", "DHANI"],
+            "canonical_symbol": [pd.NA, "DHANI"],
+            "series": ["EQ", "EQ"],
+        })
+        canonical, identity_col, use_canonical = prepare_price_identity(canonical)
+        self.assertTrue(use_canonical)
+        self.assertEqual(canonical[identity_col].tolist(), ["DHANI", "DHANI"])
 
     def test_backtest_loads_valid_from_valid_to_membership_intervals(self):
         with tempfile.TemporaryDirectory() as tmp:
