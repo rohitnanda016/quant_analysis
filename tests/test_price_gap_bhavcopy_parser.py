@@ -77,16 +77,18 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertFalse(checkpoint_matches(checkpoint, "2014-01-01", "2026-08-30", 42628, 2892))
         self.assertFalse(checkpoint_matches({}, "2014-01-01", "2026-08-31", 42628, 2892))
 
-    def test_resumed_merge_deduplicates_date_symbol_series(self):
+    def test_resumed_merge_removes_only_exact_duplicate_rows(self):
         from scripts.repair_price_gaps_bhavcopy import deduplicate_price_rows
 
         frame = pd.DataFrame([
             {"date": "2024-01-02", "symbol": "ABC", "series": "EQ", "close": 10},
             {"date": "2024-01-02", "symbol": "ABC", "series": "EQ", "close": 10},
+            {"date": "2024-01-02", "symbol": "ABC", "series": "EQ", "close": 11},
             {"date": "2024-01-02", "symbol": "ABC", "series": "BE", "close": 10},
         ])
         result = deduplicate_price_rows(frame)
-        self.assertEqual(len(result), 2)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(set(result["close"]), {10, 11})
 
 
 if __name__ == "__main__":
