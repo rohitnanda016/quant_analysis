@@ -323,13 +323,10 @@ def main():
     if a.resume and checkpoint_path.exists():
         prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         expected_pairs = int(sum(len(symbols) for symbols in targets_by_date.values()))
-        if (
-            not checkpoint_matches(
-                prior, start, end, expected_pairs, len(all_days),
-                warmup_sessions=a.membership_warmup_sessions,
-                target_inventory_hash=target_inventory_hash,
-            )
-            or "attempted_date_values" not in prior
+        if not checkpoint_matches(
+            prior, start, end, expected_pairs, len(all_days),
+            warmup_sessions=a.membership_warmup_sessions,
+            target_inventory_hash=target_inventory_hash,
         ):
             # Membership scoping changes the inventory materially. Never mix
             # additions/absence rows from the old all-history inventory with
@@ -343,14 +340,22 @@ def main():
                 stale_path.unlink(missing_ok=True)
         else:
             completed_date_values = set(prior.get("completed_date_values", []))
-            attempted_date_values = set(prior.get("attempted_date_values", []))
+            fetch_errors = list(prior.get("fetch_errors", []))
+            if "attempted_date_values" in prior:
+                attempted_date_values = set(prior.get("attempted_date_values", []))
+            else:
+                # Migrate a matching checkpoint from the immediately preceding
+                # repair version: every successful date plus its persisted fetch
+                # error dates were attempted in that batch.
+                attempted_date_values = set(completed_date_values) | {
+                    str(item.get("date")) for item in fetch_errors if item.get("date")
+                }
             completed = len(attempted_date_values)
             if additions_path.exists() and additions_path.stat().st_size:
                 additions = pd.read_csv(additions_path, low_memory=False).to_dict("records")
             if absences_path.exists() and absences_path.stat().st_size:
                 absence_exceptions = pd.read_csv(absences_path, low_memory=False).to_dict("records")
             fetched_days = int(prior.get("fetched_dates", 0))
-            fetch_errors = list(prior.get("fetch_errors", []))
             benchmark_presence_counts = prior.get("benchmark_presence", benchmark_presence_counts)
             for symbol, counts in prior.get("non_eq_target_presence", {}).items():
                 for series_name, count in counts.items():
