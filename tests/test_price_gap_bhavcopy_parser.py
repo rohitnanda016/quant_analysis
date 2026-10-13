@@ -26,6 +26,7 @@ from scripts.run_fluidq_backtest import (
     load_membership, normalize_price_series, eq_tradable_rows, prepare_price_identity,
 )
 from scripts.symbol_lineage import load_symbol_rename_rows, symbol_map_fingerprint
+from scripts.repair_missing_pairs_security_history import parse_security_history, classify_target_date
 
 
 class ParseBhavcopyTests(unittest.TestCase):
@@ -79,6 +80,33 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(set(frame["series"]), {"EQ", "BE", "BZ"})
         self.assertEqual(len(frame), 3)
         self.assertEqual(frame.loc[frame["series"].eq("BE"), "close"].iloc[0], 103)
+
+    def test_security_history_parser_requires_trading_sessions_around_no_trade_date(self):
+        csv = (
+            '"Symbol  ","Series  ","Date  ","Prev Close  ","Open Price  ","High Price  ","Low Price  ","'
+            'Last Price  ","Close Price  ","Average Price ","Total Traded Quantity  ","Turnover ₹","No. of Trades"\n'
+            '"DYNAMATECH","EQ","07-May-2014","100","100","102","99","101","101","100.5","1000","100500","25"\n'
+            '"DYNAMATECH","EQ","09-May-2014","101","101","103","100","102","102","101.5","1100","111650","30"\n'
+        )
+        history = parse_security_history(csv)
+        outcome, exact = classify_target_date(history, "2014-05-08")
+        self.assertEqual(outcome, "verified_no_trade")
+        self.assertTrue(exact.empty)
+        before_only = history.loc[history["date"].lt(pd.Timestamp("2014-05-08"))]
+        outcome, _ = classify_target_date(before_only, "2014-05-08")
+        self.assertEqual(outcome, "unverified")
+
+    def test_security_history_exact_date_is_an_observed_price(self):
+        csv = (
+            '"Symbol  ","Series  ","Date  ","Prev Close  ","Open Price  ","High Price  ","Low Price  ","'
+            'Last Price  ","Close Price  ","Average Price ","Total Traded Quantity  ","Turnover ₹","No. of Trades"\n'
+            '"MAHSCOOTER","EQ","28-Oct-2024","10000","10000","10100","9900","10050","10050","10020","1500","15030000","40"\n'
+        )
+        history = parse_security_history(csv)
+        outcome, exact = classify_target_date(history, "2024-10-28")
+        self.assertEqual(outcome, "observed_price")
+        self.assertEqual(len(exact), 1)
+        self.assertEqual(float(exact["close"].iloc[0]), 10050.0)
 
     def test_verified_no_trade_absences_are_not_double_counted(self):
         absences = [

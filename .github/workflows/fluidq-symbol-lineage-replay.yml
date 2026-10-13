@@ -145,6 +145,19 @@ jobs:
             --min-bhavcopy-eq-rows 500 --max-dates 600 --resume
           mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
 
+      - name: Cross-check residual gaps against NSE security-wise history
+        id: security_history_audit
+        continue-on-error: true
+        run: |
+          python scripts/repair_missing_pairs_security_history.py \
+            --prices data/raw/stage_a_prices.csv \
+            --exceptions data/input/unresolved_gap_exceptions.csv \
+            --no-trade data/input/verified_no_trade_dates.csv \
+            --repair-report results/price_quality/bhavcopy_gap_repair.json \
+            --symbol-map data/input/verified_symbol_map.csv \
+            --symbol-map-supplement data/reference/nse_historical_symbol_changes.csv \
+            --audit-report results/price_quality/security_history_gap_audit.json
+
       - name: Audit raw price quality
         id: raw_audit
         continue-on-error: true
