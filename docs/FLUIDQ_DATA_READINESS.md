@@ -1,6 +1,6 @@
 # FLUID-Q data readiness and recovery plan
 
-**Status date:** 2026-10-11  
+**Status date:** 2026-10-13  
 **Branch:** `v1.2-factor-attribution`  
 **Locked evaluation window:** 2026-09-01 through 2027-08-31 — do not use for tuning or factor selection.
 
@@ -16,11 +16,13 @@
 
 ## Recovery design now implemented
 
-- `scripts/repair_price_gaps_bhavcopy.py` discovers long internal gaps and queries the official daily NSE bhavcopy once per affected date. It inserts only exact `EQ` rows present in the source.
-- If the official daily archive was successfully parsed but contains no `EQ` row for a candidate symbol/date, the pair is recorded in `data/input/verified_no_trade_dates.csv`. This is evidence about the absence of a quoted trade, **not** a price row. Failed archive requests are explicitly unresolved and never counted as no-trade.
-- `scripts/audit_price_gap_readiness.py` reconciles candidate pairs, archive failures, raw observations and the no-trade ledger. It also reports corporate-action/total-return blockers separately so a raw-gap pass is not mistaken for full research approval.
-- `scripts/run_fluidq_backtest.py` retains the strict held-return error. It can carry forward a last-close mark across long gaps only when each such date is covered by the official no-trade ledger. The next actual quote still captures the cumulative move; no synthetic raw prices are inserted.
-- The targeted repair workflow uploads a diagnostic artifact even when readiness is blocked. It publishes a research-input artifact only after the price-gap gate and adjustment build succeed.
+- `scripts/repair_price_gaps_bhavcopy.py` now scopes long-gap repair to dated historical Nifty 500 membership intervals plus a 252-session warm-up for the momentum/200-DMA features. The exact date/symbol target inventory is fingerprinted in the checkpoint; a stale inventory cannot be resumed silently.
+- The repair prefers actual `EQ` quotes and can preserve actual NSE `BE`/`BZ` closes as alternate-series price observations when no `EQ` close exists. Original series labels are retained; no `BE`/`BZ` row is relabelled as `EQ`. A symbol/date with no usable EQ/BE/BZ price row remains unresolved unless the no-trade/suspension case has independent evidence and explicit approval.
+- Failed archive dates are recorded as fetch errors and as attempted dates. The batch chain moves forward rather than repeatedly retrying the same failed day forever; final readiness still blocks unresolved errors.
+- `scripts/audit_price_quality.py` parses mixed historical date formats, counts invalid dates separately, and does not count all `SYMBOL|NaT` rows as duplicate observations. Series counts are aggregated across the full file.
+- `scripts/audit_price_gap_readiness.py` reconciles the in-scope candidate pairs, actual EQ/BE/BZ observations, explicit no-trade evidence, archive errors and raw quality. It reports corporate-action/total-return blockers separately; a price-gap pass is not full research approval.
+- `scripts/run_fluidq_backtest.py` now recognizes `valid_from`/`valid_to` membership intervals as well as dated review snapshots, and refuses an undated membership input rather than silently disabling the universe filter. Its price panel can use actual EQ/BE/BZ closes for continuity, but new rebalance selections remain limited to EQ. The strict missing-held-return error is retained.
+- The targeted repair workflow is manual-dispatch only; ordinary code pushes no longer enqueue a full historical repair. It uploads diagnostics when readiness is blocked and publishes a research-input artifact only when the gates pass.
 - Factor attribution, factor compression, robustness, economic-gate, walk-forward and factor-diagnostics workflows now require an explicit integrity run ID, check the readiness report, and are manual-dispatch only. They no longer re-run automatically on every engine/workflow push or fall back silently to old run IDs.
 - The general full-history research workflow now runs the broad daily-bhavcopy repair and includes the no-trade ledger/readiness report in its artifact.
 
@@ -28,8 +30,8 @@
 
 ### Gate A — source completeness
 - No failed bhavcopy dates in the repair report.
-- Every targeted long-gap pair must be backed by a raw NSE EQ observation or an independently evidenced, explicitly approved no-trade/suspension case. A bhavcopy absence alone stays unresolved and blocks the gate.
-- No row is fabricated, and the raw `EQ` series remains separate from E1/other series.
+- Every targeted long-gap pair must be backed by an actual EQ/BE/BZ price observation or an independently evidenced, explicitly approved no-trade/suspension case. A bhavcopy absence alone stays unresolved and blocks the gate.
+- No row is fabricated and source series labels are never rewritten. E1 and other non-price-equivalent series must not be mixed into the EQ/BE/BZ equity-price continuity panel.
 - The strict missing-held-return check remains enabled.
 
 ### Gate B — corporate actions
@@ -40,7 +42,7 @@
 ### Gate C — universe integrity
 - Validate historical Nifty 500 effective-from/effective-to intervals, symbol rename lineages and listing/delisting dates against dated primary records.
 - Investigate `snapshot_floor` intervals rather than automatically assuming each is correct.
-- Test survivorship/look-ahead controls, stale values, duplicate canonical issuer/date pairs, missing membership-price joins, and only-traded-EQ series.
+- Test survivorship/look-ahead controls, stale values, duplicate canonical issuer/date pairs, missing membership-price joins, and the separation between EQ-only selection eligibility and BE/BZ mark-to-market continuity.
 
 ### Gate D — research execution
 - Only launch research with an explicit artifact run ID whose readiness report has `price_gap_integrity=PASS`.
@@ -58,15 +60,15 @@
 ## Operational runbook — current repair generation
 
 1. Use **FLUID-Q Targeted Price Gap Repair** on branch `v1.2-factor-attribution` with base run ID `36875371038` (the source artifact `fluidq-finalized-full-history-36875371038`). The workflow now runs a parser preflight for legacy and UDiFF schemas before downloading the 254 MB dataset.
-2. The repair calls `NSEArchives.bhavcopy_raw`, which selects the legacy archive for historical dates and supports UDiFF-era files from 8 July 2024. The row parser normalizes the two schemas and converts legacy `TURNOVER_LACS` into rupees before writing the raw series. The source response must include at least 500 EQ observations before absence of a symbol is treated as no-trade evidence.
-3. The broad scan has an initial inventory of 2,892 archive dates and 42,741 candidate symbol/date pairs. It processes at most three source sessions concurrently and logs every 50 dates. This is source verification, not a job that should be judged by the old targeted repair's one-symbol windows.
+2. The repair calls `NSEArchives.bhavcopy_raw`, which selects the legacy archive for historical dates and supports UDiFF-era files from 8 July 2024. The parser normalizes both schemas and converts legacy `TURNOVER_LACS` into rupees. Each daily response must contain at least 500 EQ rows to pass the archive completeness sanity check; that threshold does not turn an absent ticker into a no-trade approval.
+3. The membership-scoped inventory produced 9,781 candidate symbol/date pairs over 2,209 archive dates (versus the previous unscoped inventory of over 42,000 pairs). The first 1,200 dates were processed in two 600-date batches: 5,574 actual rows added, 5,499 of those BE/BZ rows, 261 absences still unresolved, and zero archive-fetch errors. Run #45 continues the remaining dates; these intermediate counts are not a final readiness result.
 4. Inspect `results/price_quality/price_gap_readiness.json` and `data/input/unresolved_gap_exceptions.csv` in the run artifact. Use the artifact as an exploratory **price-return** input only if `status=PASS_PRICE_GAPS` and all missing pairs have an observation or independent evidence. The gate also requires basic raw-price quality and current archive-adapter provenance. If blocked, use the diagnostic artifact, not the research-input artifact.
 5. Research workflows are manual-only and require the explicit run ID of the gated artifact. Old queued runs that were created before this change may still be running against a fixed historic price-integrity artifact; their output is stale/unqualified even if a job says success. Do not use those outputs for factor selection or reports.
 
 ## Remaining release work after source-gap repair
 
 - **Corporate actions:** the current adjustment is split/bonus-only. Resolve the residual outliers against issuer/ex-date evidence, then build dividend-aware total return. Keep `total_return_ready=false` in all outputs until that is verified.
-- **Membership:** review every `snapshot_floor` historical interval against dated evidence and re-run survivorship/look-ahead tests.
+- **Membership:** review every `snapshot_floor` historical interval against dated evidence and re-run survivorship/look-ahead tests. The backtest loader now applies dated validity intervals; that does not resolve the separate provenance problem in inferred starting dates.
 - **Execution and costs:** re-check the close-to-close timing with signal/execution dates, bid/ask and liquidity sensitivity, and alternate cost assumptions. The current linear transaction-cost estimate is a sensitivity model, not a fill simulation.
 - **Benchmarks:** report both price-index-relative momentum (if retained as a factor) and total-return benchmark performance once a sourced TRI series is available.
 - **Locked evaluation:** do not use 2026-09-01 through 2027-08-31 to choose factor weights, rebalance frequency, exposure thresholds, or holding counts.
