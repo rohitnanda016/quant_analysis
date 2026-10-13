@@ -14,6 +14,32 @@ NSE_INDEX_URL = "https://archives.nseindia.com/content/indices/ind_close_all_{da
 SYMBOL_ALIASES = {
     "SKSMICRO": "BHARATFIN",  # NSE symbol change effective 2016-07-01
 }
+PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
+
+
+def normalize_price_series(frame, series_col):
+    """Keep actual EQ/BE/BZ closes for marks; preserve source series labels."""
+    out = frame.copy()
+    if series_col:
+        normalized = out[series_col].astype(str).str.upper().str.strip()
+        out["series"] = normalized
+        if series_col != "series":
+            out = out.drop(columns=[series_col])
+        out = out.loc[out["series"].isin(PRICE_CONTINUITY_SERIES)].copy()
+    else:
+        # Legacy input without series metadata retains the previous EQ-only assumption.
+        out["series"] = "EQ"
+    if out.empty:
+        raise ValueError("No EQ/BE/BZ price-continuity rows remain in the input.")
+    return out
+
+
+def eq_tradable_rows(frame):
+    """Only ordinary EQ-series rows can enter a new rebalance selection."""
+    if "series" not in frame:
+        return frame.copy()
+    return frame.loc[frame["series"].astype(str).str.upper().str.strip().eq("EQ")].copy()
+
 
 def canonicalize_symbol(series):
     return series.astype(str).str.upper().str.strip().replace(SYMBOL_ALIASES)
@@ -35,10 +61,20 @@ def load_membership(path):
     if not sym: raise ValueError(f"Could not identify membership symbol column: {list(m.columns)}")
     m=m.rename(columns={sym:"symbol"})
     m["symbol"]=canonicalize_symbol(m["symbol"])
-    start=find_col(m,["review_date","effective_date","start_date","date"])
-    end=find_col(m,["end_date"])
-    m["effective_date"]=pd.to_datetime(m[start],errors="coerce") if start else pd.NaT
-    if end: m["end_date"]=pd.to_datetime(m[end],errors="coerce")
+    # The project membership artifact uses validity intervals, while older
+    # experiments used review-date snapshots. Support both schemas explicitly.
+    start=find_col(m,["review_date","effective_date","start_date","valid_from","date"])
+    end=find_col(m,["end_date","valid_to"])
+    if not start:
+        raise ValueError(
+            "Membership file must include review_date/effective_date/start_date/valid_from; "
+            "refusing to run without dated universe membership."
+        )
+    m["effective_date"]=pd.to_datetime(m[start],errors="coerce",format="mixed")
+    if end: m["end_date"]=pd.to_datetime(m[end],errors="coerce",format="mixed")
+    m=m.dropna(subset=["effective_date"]).copy()
+    if m.empty:
+        raise ValueError("Membership file contains no usable effective dates.")
     return m[["symbol","effective_date"] + (["end_date"] if "end_date" in m.columns else [])]
 
 
@@ -126,24 +162,19 @@ def main():
     turnc=find_col(df,["turnover_₹","turnover","turnover_rs"])
     seriesc=find_col(df,["series"])
     if not all([datec,symc,closec]): raise ValueError("Required price columns missing")
-    # The source can contain multiple NSE series for the same issuer, e.g.
-    # IBVENTURES-EQ (fully paid shares) and IBVENTURES-E1 (partly paid shares).
-    # E1 was suspended from 2018-07-30 to 2018-10-11 while EQ continued trading.
-    # Mixing series and dropping duplicates by symbol/date creates a false
-    # multi-month price gap and can select the wrong security. This strategy
-    # trades ordinary fully-paid EQ shares only; filter explicitly when series
-    # metadata exists, and fail if that filter would leave no usable rows.
-    if seriesc:
-        series_values=df[seriesc].astype(str).str.upper().str.strip()
-        eq_mask=series_values.eq("EQ")
-        if eq_mask.any():
-            before=len(df)
-            df=df.loc[eq_mask].copy()
-            print(json.dumps({"series_filter":"EQ","series_column":seriesc,
-                              "rows_before":int(before),"rows_after":int(len(df)),
-                              "rows_excluded":int(before-len(df))}),flush=True)
-        else:
-            raise ValueError(f"Series column {seriesc!r} exists but contains no EQ rows; refusing to mix security series")
+    # EQ is the tradable universe for new holdings. BE/BZ are the same fully-paid
+    # equity-share family under trade-for-trade settlement, so their observed
+    # closes may maintain price/return continuity, but they are not candidates
+    # for a new purchase at the rebalance snapshot.
+    rows_before_series_filter=len(df)
+    df=normalize_price_series(df, seriesc)
+    print(json.dumps({
+        "price_series_policy":"EQ/BE/BZ closes retained for returns; EQ only for new holdings",
+        "series_column":seriesc,
+        "rows_before":int(rows_before_series_filter),
+        "rows_after":int(len(df)),
+        "series_counts":df["series"].value_counts().to_dict(),
+    }),flush=True)
     if symc != "symbol" and "symbol" in df.columns: df=df.drop(columns=["symbol"])
     ren={datec:"date",symc:"symbol",closec:"close"}
     if vwapc: ren[vwapc]="vwap"
@@ -152,10 +183,20 @@ def main():
     if list(df.columns).count("symbol")>1:
         inds=[i for i,c in enumerate(df.columns) if c=="symbol"]
         df=df.iloc[:,[i for i,c in enumerate(df.columns) if c!="symbol" or i==inds[-1]]]
-    df["date"]=pd.to_datetime(df["date"]); df["symbol"]=canonicalize_symbol(df["symbol"])
+    df["date"]=pd.to_datetime(df["date"],errors="coerce",format="mixed")
+    df["symbol"]=canonicalize_symbol(df["symbol"])
     for c in ["close","vwap","turnover"]:
         if c in df: df[c]=pd.to_numeric(df[c],errors="coerce")
-    df=df.sort_values(["symbol","date"]).drop_duplicates(["symbol","date"])
+    df=df.dropna(subset=["date","symbol","close"]).sort_values(["symbol","date"])
+    duplicate_keys=df.duplicated(["symbol","date"],keep=False)
+    if duplicate_keys.any():
+        examples=df.loc[duplicate_keys,["symbol","date","series","close"]].head(10)
+        raise ValueError(
+            "Conflicting/multiple EQ/BE/BZ rows exist for a canonical symbol/date; "
+            "refusing arbitrary deduplication. Examples: "
+            + examples.to_json(orient="records",date_format="iso")
+        )
+    df=df.reset_index(drop=True)
 
     g=df.groupby("symbol",sort=False)
     df["ret_6m"]=g["close"].pct_change(126)
@@ -185,23 +226,28 @@ def main():
     reb_dates=df.groupby(period_key)["date"].max().tolist(); snapshots=[]; holdings=set(); price_dates=np.sort(df["date"].unique())
 
     for rd in reb_dates:
-        snap=df[df.date==rd].copy()
-        if snap.empty: continue
+        market_snap=df[df.date==rd].copy()
+        if market_snap.empty: continue
         if members["effective_date"].notna().any():
             mm=members[members.effective_date<=rd].copy()
-            if not mm.empty:
-                if "end_date" in mm.columns:
-                    mm=mm[(mm["end_date"].isna()) | (mm["end_date"]>=rd)]
-                    active=mm[["symbol"]].drop_duplicates()
-                else:
-                    # Snapshot-form PIT file: each review date contains the full
-                    # constituent set. Use only the latest snapshot as of rd;
-                    # do not carry exited constituents forward indefinitely.
-                    latest_review=mm["effective_date"].max()
-                    active=mm.loc[mm["effective_date"].eq(latest_review),["symbol"]].drop_duplicates()
-                snap=snap.merge(active,on="symbol",how="inner")
-        nifty6=float(snap["nifty500_ret_6m"].iloc[0]) if snap["nifty500_ret_6m"].notna().any() else np.nan
-        nifty_dma=float(snap["nifty500_dma200"].iloc[0]) if snap["nifty500_dma200"].notna().any() else np.nan
+            if "end_date" in mm.columns:
+                mm=mm[(mm["end_date"].isna()) | (mm["end_date"]>=rd)]
+                active=mm[["symbol"]].drop_duplicates()
+            else:
+                # Snapshot-form PIT file: each review date contains the full
+                # constituent set. Use only the latest snapshot as of rd;
+                # do not carry exited constituents forward indefinitely.
+                latest_review=mm["effective_date"].max() if not mm.empty else pd.NaT
+                active=mm.loc[mm["effective_date"].eq(latest_review),["symbol"]].drop_duplicates()
+            # Merge even when active is empty: never silently use the full universe.
+            market_snap=market_snap.merge(active,on="symbol",how="inner")
+        if market_snap.empty: continue
+        nifty6=float(market_snap["nifty500_ret_6m"].iloc[0]) if market_snap["nifty500_ret_6m"].notna().any() else np.nan
+        nifty_dma=float(market_snap["nifty500_dma200"].iloc[0]) if market_snap["nifty500_dma200"].notna().any() else np.nan
+        # Market breadth includes valid price marks across EQ/BE/BZ. Portfolio
+        # selection below uses only EQ-series rows.
+        breadth=float((market_snap["close"]>market_snap["dma200"]).mean())
+        snap=eq_tradable_rows(market_snap)
         snap["rs6"]=snap["ret_6m"]-nifty6
         if sector_members is not None:
             sm=sector_members[(sector_members.valid_from<=rd)&((sector_members.valid_to.isna())|(sector_members.valid_to>=rd))]
@@ -245,13 +291,12 @@ def main():
         for s in candidates.symbol:
             if s not in chosen and len(chosen)<a.top_n and can_add(s): add(s)
         chosen=chosen[:a.top_n]
-        breadth=float((snap["close"]>snap["dma200"]).mean())
-        healthy=int(breadth>=.60)+int(nifty6>0)+int(nifty_dma>0 and float(snap["nifty500_close"].iloc[0])>nifty_dma)
+        healthy=int(breadth>=.60)+int(nifty6>0)+int(nifty_dma>0 and float(market_snap["nifty500_close"].iloc[0])>nifty_dma)
         exposure={3:1.0,2:.75,1:.50,0:.25}[healthy]
         day_events=set(events.loc[events.event_date==rd,"symbol"].astype(str).str.upper())
         chosen=[s for s in chosen if not (s in corporate and s in day_events)]
         turnover=(len(set(chosen)^set(holdings))/2)/max(len(chosen),1) if chosen else (1.0 if holdings else 0.0)
-        snapshots.append({"date":rd,"n_eligible":len(eligible),"holdings":",".join(chosen),"exposure":exposure,"regime_healthy":healthy,"breadth":breadth,"nifty500_ret_6m":nifty6,"nifty500_above_dma200":bool(nifty_dma>0 and float(snap["nifty500_close"].iloc[0])>nifty_dma),"turnover":turnover})
+        snapshots.append({"date":rd,"n_eligible":len(eligible),"holdings":",".join(chosen),"exposure":exposure,"regime_healthy":healthy,"breadth":breadth,"nifty500_ret_6m":nifty6,"nifty500_above_dma200":bool(nifty_dma>0 and float(market_snap["nifty500_close"].iloc[0])>nifty_dma),"turnover":turnover})
         holdings=set(chosen)
 
     sig=pd.DataFrame(snapshots)
@@ -390,7 +435,7 @@ def main():
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "return_basis":"split_bonus_adjusted_price_returns_ex_dividends; exploratory price-return series, not total return", "total_return_ready":False, "price_gap_policy":"Forward-fill up to 10 unverified missing sessions; extend mark-to-last-close only on dates marked verified_no_trade by a successfully parsed official NSE EQ bhavcopy. Raw prices are never fabricated; unverified longer gaps remain missing and fail if held.", "verified_no_trade_ledger":str(no_trade_path) if no_trade_path.exists() else None, "verified_no_trade_pairs":verified_no_trade_pairs, "verified_no_trade_cells_filled":verified_no_trade_cells_filled, "missing_price_cells_before_fill":missing_price_cells_before_fill, "short_stale_price_cells_filled":short_stale_cells_filled, "stale_price_cells_filled":stale_price_cells_filled, "remaining_unverified_missing_cells":remaining_unverified_missing, "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "return_basis":"split_bonus_adjusted_price_returns_ex_dividends; exploratory price-return series, not total return", "total_return_ready":False, "price_gap_policy":"Forward-fill up to 10 unverified missing sessions; extend mark-to-last-close only on dates marked verified_no_trade by a successfully parsed official NSE EQ bhavcopy. Actual EQ/BE/BZ closes are used for price and held-return continuity; only EQ rows are eligible for new holdings. Raw prices are never fabricated; unverified longer gaps remain missing and fail if held.", "price_series_policy":"EQ/BE/BZ close history for returns; EQ only for new holdings. Trade-to-trade execution frictions are approximated by the existing close-fill/cost model and are not a fill simulation.", "membership_schema":"dated effective intervals (valid_from/valid_to) or explicit dated review snapshots are applied; undated membership inputs are rejected.", "verified_no_trade_ledger":str(no_trade_path) if no_trade_path.exists() else None, "verified_no_trade_pairs":verified_no_trade_pairs, "verified_no_trade_cells_filled":verified_no_trade_cells_filled, "missing_price_cells_before_fill":missing_price_cells_before_fill, "short_stale_price_cells_filled":short_stale_cells_filled, "stale_price_cells_filled":stale_price_cells_filled, "remaining_unverified_missing_cells":remaining_unverified_missing, "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
