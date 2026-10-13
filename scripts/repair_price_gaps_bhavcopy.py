@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Backfill long internal NSE price gaps from official daily bhavcopy archives.
 
-Only exact EQ observations from an official archive are inserted. A symbol/date
+Only exact EQ observations from an official archive are inserted. Date normalization and quality validation are handled explicitly downstream. A symbol/date
 pair absent from a successfully parsed archive is recorded as unresolved until
 independent listing/suspension evidence is supplied. It is never written as a
 synthetic raw price or automatically approved as a no-trade day.
