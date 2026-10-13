@@ -17,6 +17,10 @@ on:
         description: "Optional prior repair run ID whose checkpoint artifact should be restored"
         required: false
         default: ""
+      batch_size:
+        description: "Maximum archive dates per run (smaller batches allow checkpoint artifacts to be saved)"
+        required: false
+        default: "600"
 
 # Do not cancel a long-running archive scan when a newer commit arrives.
 # The repair reads thousands of official daily archives and should finish its
@@ -89,7 +93,7 @@ jobs:
             --exceptions-out data/input/unresolved_gap_exceptions.csv \
             --report results/price_quality/bhavcopy_gap_repair.json \
             --start 2014-01-01 --end 2026-08-31 \
-            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500 \
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500 --max-dates "${{ inputs.batch_size || '600' }}" \
             $([ -s results/price_quality/bhavcopy_repair_checkpoint.json ] && echo --resume)
           rc=$?
           if [ -s data/raw/stage_a_prices_repaired.csv ]; then
