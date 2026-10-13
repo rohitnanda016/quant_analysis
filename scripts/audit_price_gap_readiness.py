@@ -39,7 +39,7 @@ def main():
     p = pd.read_csv(args.prices, usecols=lambda c: c in {
         "date", "symbol", "requested_symbol", "series", "close"
     }, low_memory=False)
-    p["date"] = pd.to_datetime(p["date"], errors="coerce")
+    p["date"] = pd.to_datetime(p["date"], errors="coerce", format="mixed")
     p["symbol"] = p["symbol"].astype(str).str.strip().str.upper()
     source_symbol = "requested_symbol" if "requested_symbol" in p.columns else "symbol"
     p[source_symbol] = p[source_symbol].astype(str).str.strip().str.upper()
@@ -55,7 +55,7 @@ def main():
     nt = pd.read_csv(nt_path, low_memory=False)
     if not {"date", "symbol", "status"}.issubset(nt.columns):
         raise SystemExit("Verified no-trade ledger must contain date, symbol, status")
-    nt["date"] = pd.to_datetime(nt["date"], errors="coerce")
+    nt["date"] = pd.to_datetime(nt["date"], errors="coerce", format="mixed")
     nt["symbol"] = nt["symbol"].astype(str).str.strip().str.upper()
     nt = nt[nt["status"].eq("verified_no_trade")].dropna(subset=["date", "symbol"])
     ledger_evidence_issues = []
@@ -165,7 +165,7 @@ def main():
         gap_blockers.append("Raw price-quality summary is missing; basic OHLC, duplicate and nonpositive-close checks have not passed.")
     else:
         basic_quality_fields = [
-            "missing_ohlc", "nonpositive_close", "ohlc_order_issues",
+            "invalid_date_rows", "missing_ohlc", "nonpositive_close", "ohlc_order_issues",
             "negative_volume", "negative_turnover", "duplicate_date_symbol",
         ]
         invalid_quality = {
