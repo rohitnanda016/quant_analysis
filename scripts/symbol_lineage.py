@@ -48,6 +48,28 @@ def load_symbol_rename_rows(base_path, supplement_path=DEFAULT_SUPPLEMENT):
     ]
 
 
+
+def terminal_symbol_aliases(rename_rows):
+    """Flatten historical rename chains to their latest stable issuer ticker."""
+    direct = {}
+    symbols = set()
+    for old, new, _effective in rename_rows:
+        direct[str(old).strip().upper()] = str(new).strip().upper()
+        symbols.update({str(old).strip().upper(), str(new).strip().upper()})
+    aliases = {}
+    for symbol in symbols:
+        current = symbol
+        seen = set()
+        while current in direct and current not in seen:
+            seen.add(current)
+            next_symbol = direct[current]
+            if next_symbol == current:
+                break
+            current = next_symbol
+        aliases[symbol] = current
+    return aliases
+
+
 def symbol_map_fingerprint(rename_rows):
     """Stable fingerprint used to detect when old gap absences need replay."""
     records = sorted(
