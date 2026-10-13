@@ -55,9 +55,13 @@ def find_col(df, candidates):
     return None
 
 
-def load_membership(path):
+def load_membership(path, canonical_symbols=False):
     m=pd.read_csv(path)
-    sym=find_col(m,["symbol","security","security_symbol","ticker"])
+    # Price panels may deliberately use a canonical-issuer key; otherwise use
+    # the historical, effective symbol that appears in the dated interval.
+    sym=(find_col(m,["canonical_symbol"]) if canonical_symbols else None)
+    if not sym:
+        sym=find_col(m,["symbol","security","security_symbol","ticker"])
     if not sym: raise ValueError(f"Could not identify membership symbol column: {list(m.columns)}")
     m=m.rename(columns={sym:"symbol"})
     m["symbol"]=canonicalize_symbol(m["symbol"])
@@ -210,7 +214,10 @@ def main():
     nifty=load_nifty500_from_file(a.nifty500_index,df["date"].unique()) if a.nifty500_index else load_nifty500_index(df["date"].unique())
     df=df.merge(nifty[["date","nifty500_close","nifty500_ret_6m","nifty500_dma200"]],on="date",how="left")
 
-    members=load_membership(a.membership)
+    members=load_membership(
+        a.membership,
+        canonical_symbols=str(symc).lower().replace(" ","_")=="canonical_symbol",
+    )
     sector_members=None
     if a.sector_constrained:
         if not a.sector_membership:
