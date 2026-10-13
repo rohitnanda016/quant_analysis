@@ -1,4 +1,5 @@
 import argparse, json
+from collections import Counter
 from pathlib import Path
 import pandas as pd
 
@@ -16,7 +17,7 @@ def num(s):
 
 cols=["canonical_symbol","symbol","series","date","prev_close","open","high","low","close","vwap","volume","turnover ₹","turnover_₹"]
 total=invalid_dates=missing_ohlc=nonpositive=ohlc_order=neg_volume=neg_turnover=duplicates=extreme=0
-extreme_rows=[]; duplicate_examples=[]; seen=set()
+extreme_rows=[]; duplicate_examples=[]; seen=set(); series_counts=Counter()
 for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_memory=False):
     # EQ is preferred, but valid BE/BZ closes are still observed market prices.
     # Their series labels remain intact for separate execution-eligibility checks.
@@ -24,6 +25,8 @@ for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_
         ch=ch[ch["series"].astype(str).str.strip().str.upper().isin(PRICE_CONTINUITY_SERIES)].copy()
     if ch.empty:
         continue
+    if "series" in ch.columns:
+        series_counts.update(ch["series"].astype(str).str.strip().str.upper().value_counts().to_dict())
     total += len(ch)
     if "canonical_symbol" not in ch.columns: ch["canonical_symbol"]=ch["symbol"]
     ch["date"]=pd.to_datetime(ch["date"],errors="coerce",format="mixed")
@@ -65,10 +68,7 @@ ext=pd.concat(extreme_rows,ignore_index=True) if extreme_rows else pd.DataFrame(
 extreme=len(ext)
 ext.to_csv(out/"extreme_returns_raw.csv",index=False)
 pd.DataFrame(duplicate_examples,columns=["canonical_symbol","date","symbol","series","close"]).to_csv(out/"duplicate_date_symbol_examples.csv",index=False)
-series_counts = {}
-if "series" in ch.columns:
-    series_counts = ch["series"].astype(str).str.strip().str.upper().value_counts().to_dict()
-summary={"rows":total,"series_filter":"EQ, BE and BZ price-continuity observations; original series labels retained","series_counts":series_counts,"invalid_date_rows":invalid_dates,"missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
+summary={"rows":total,"series_filter":"EQ, BE and BZ price-continuity observations; original series labels retained","series_counts":dict(series_counts),"invalid_date_rows":invalid_dates,"missing_ohlc":missing_ohlc,"nonpositive_close":nonpositive,"ohlc_order_issues":ohlc_order,
 "negative_volume":neg_volume,"negative_turnover":neg_turnover,"duplicate_date_symbol":duplicates,
 "duplicate_examples_written":len(duplicate_examples),"extreme_returns_gt_threshold":extreme,"extreme_threshold":a.extreme_pct,
 "note":"Price-quality checks cover EQ/BE/BZ observations. Mixed date formats are parsed explicitly; invalid dates are counted separately and excluded from duplicate-key counting. Duplicate keys are canonical_symbol + date across the entire file, including chunk boundaries. BE/BZ price observations are not relabeled as EQ; execution eligibility must be handled separately. Extreme-return detection uses NSE Prev Close; it is diagnostic, not evidence of a corporate action."}
