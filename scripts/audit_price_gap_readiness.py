@@ -12,10 +12,10 @@ import pandas as pd
 
 try:
     from scripts.membership_scope import build_membership_session_windows, in_membership_research_window
-    from scripts.symbol_lineage import load_symbol_rename_rows
+    from scripts.symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
 except ModuleNotFoundError:
     from membership_scope import build_membership_session_windows, in_membership_research_window
-    from symbol_lineage import load_symbol_rename_rows
+    from symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
 
 PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
 
@@ -105,11 +105,8 @@ def main():
             nt = nt.loc[~invalid_evidence].copy()
     no_trade = set(zip(nt["date"], nt["symbol"]))
 
-    aliases = {}
     rename_rows = load_symbol_rename_rows(args.symbol_map, args.symbol_map_supplement)
-    for old, new, _effective in rename_rows:
-        aliases[old] = new
-        aliases[new] = new
+    aliases = terminal_symbol_aliases(rename_rows)
     def terminal_alias(value):
         value = str(value).strip().upper()
         seen = set()
