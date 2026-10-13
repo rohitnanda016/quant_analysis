@@ -57,9 +57,13 @@ def checkpoint_matches(checkpoint, start, end, target_pairs, total_dates):
 
 
 def deduplicate_price_rows(frame):
-    """Keep one observation per date/symbol/series after a resumed merge."""
-    keys = ["date", "symbol", "series"] if "series" in frame.columns else ["date", "symbol"]
-    return frame.drop_duplicates(keys)
+    """Remove only byte-for-byte duplicate rows; never hide conflicting prices.
+
+    Key-level collisions (same date/symbol/series with different values) must
+    remain visible to the downstream quality gate rather than silently choosing
+    an arbitrary observation.
+    """
+    return frame.drop_duplicates()
 
 
 def norm(value):
