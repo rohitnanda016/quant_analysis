@@ -96,6 +96,18 @@ class ParseBhavcopyTests(unittest.TestCase):
         outcome, _ = classify_target_date(before_only, "2014-05-08")
         self.assertEqual(outcome, "unverified")
 
+    def test_security_history_target_row_with_blank_close_is_not_no_trade(self):
+        csv = (
+            '"Symbol  ","Series  ","Date  ","Prev Close  ","Open Price  ","High Price  ","Low Price  ","'
+            'Last Price  ","Close Price  ","Average Price ","Total Traded Quantity  ","Turnover ₹","No. of Trades"\n'
+            '"DYNAMATECH","EQ","07-May-2014","100","100","102","99","101","101","100.5","1000","100500","25"\n'
+            '"DYNAMATECH","EQ","08-May-2014","101","","","","","","","","",""\n'
+            '"DYNAMATECH","EQ","09-May-2014","101","101","103","100","102","102","101.5","1100","111650","30"\n'
+        )
+        history = parse_security_history(csv)
+        outcome, _ = classify_target_date(history, "2014-05-08")
+        self.assertEqual(outcome, "unverified_target_row_without_valid_close")
+
     def test_security_history_exact_date_is_an_observed_price(self):
         csv = (
             '"Symbol  ","Series  ","Date  ","Prev Close  ","Open Price  ","High Price  ","Low Price  ","'

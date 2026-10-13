@@ -70,8 +70,8 @@ def parse_security_history(payload):
     for col in numeric:
         if col in raw:
             raw[col] = pd.to_numeric(raw[col].astype(str).str.replace(",", "", regex=False), errors="coerce")
-    raw = raw.dropna(subset=["symbol", "date", "close"])
-    raw = raw.loc[raw["series"].eq("EQ") & raw["close"].gt(0)].copy()
+    raw = raw.dropna(subset=["symbol", "date"])
+    raw = raw.loc[raw["series"].eq("EQ")].copy()
     return raw.sort_values(["date", "symbol"]).reset_index(drop=True)
 
 
@@ -80,8 +80,16 @@ def classify_target_date(history, target_date):
     dates = pd.to_datetime(history["date"], errors="coerce").dt.normalize()
     exact = history.loc[dates.eq(target)]
     if not exact.empty:
+        valid_close = exact["close"].notna() & exact["close"].gt(0)
+        if len(exact) != 1:
+            return "unverified_duplicate_source_rows", history.iloc[0:0].copy()
+        if not bool(valid_close.iloc[0]):
+            return "unverified_target_row_without_valid_close", history.iloc[0:0].copy()
         return "observed_price", exact
-    if dates.lt(target).any() and dates.gt(target).any():
+    valid_price = history["close"].notna() & history["close"].gt(0)
+    before = dates.lt(target) & valid_price
+    after = dates.gt(target) & valid_price
+    if before.any() and after.any():
         return "verified_no_trade", history.iloc[0:0].copy()
     return "unverified", history.iloc[0:0].copy()
 
