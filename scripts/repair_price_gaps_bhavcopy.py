@@ -21,8 +21,10 @@ from jugaad_data.nse import NSEArchives
 
 try:
     from scripts.membership_scope import build_membership_session_windows, in_membership_research_window
+    from scripts.symbol_lineage import load_symbol_rename_rows, symbol_map_fingerprint
 except ModuleNotFoundError:
     from membership_scope import build_membership_session_windows, in_membership_research_window
+    from symbol_lineage import load_symbol_rename_rows, symbol_map_fingerprint
 
 _THREAD_LOCAL = threading.local()
 PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
@@ -169,6 +171,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
+    ap.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
     ap.add_argument("--membership", default="data/input/nifty500_membership.csv")
     ap.add_argument("--membership-warmup-sessions", type=int, default=252,
                     help="Price-history sessions before membership needed for momentum/200DMA features.")
@@ -252,12 +255,13 @@ def main():
 
     # Rename map applies on the effective date, so a historical query ticker
     # can still be repaired from the exchange ticker actually used that day.
-    sm = pd.read_csv(a.symbol_map)
-    sm["old_symbol"] = sm["old_symbol"].astype(str).str.strip().str.upper()
-    sm["new_symbol"] = sm["new_symbol"].astype(str).str.strip().str.upper()
-    sm["effective_from"] = pd.to_datetime(sm["effective_from"], errors="coerce")
-    rename_rows = [(r.old_symbol, r.new_symbol, r.effective_from)
-                   for r in sm.itertuples() if pd.notna(r.effective_from)]
+    rename_rows = load_symbol_rename_rows(a.symbol_map, a.symbol_map_supplement)
+    symbol_map_hash = symbol_map_fingerprint(rename_rows)
+    print(json.dumps({
+        "historical_symbol_map_rows": len(rename_rows),
+        "historical_symbol_map_sha256": symbol_map_hash,
+        "supplemental_symbol_map": a.symbol_map_supplement,
+    }), flush=True)
 
     # EQ observations define eligibility and gap discovery. Existing BE/BZ
     # observations are also valid market-price marks for return continuity,
@@ -365,10 +369,44 @@ def main():
             already_present_alias_matches = int(prior.get("already_present_alias_matches", 0))
             already_present_alternate_series_pairs = int(prior.get("already_present_alternate_series_pairs", 0))
             alternate_series_rows_added = int(prior.get("alternate_series_rows_added", 0))
+
+            # A newer, source-verified rename mapping can resolve prior absences.
+            # Revisit only dates containing an absence whose exchange ticker has
+            # changed; keep all successful observations and other exceptions.
+            previous_map_hash = prior.get("symbol_map_sha256")
+            replay_pairs = set()
+            if previous_map_hash != symbol_map_hash:
+                for item in absence_exceptions:
+                    day_value = pd.to_datetime(item.get("date"), errors="coerce", format="mixed")
+                    symbol_value = str(item.get("symbol", "")).strip().upper()
+                    if pd.isna(day_value) or not symbol_value:
+                        continue
+                    mapped = exchange_symbol(symbol_value, day_value, rename_rows)
+                    checked = str(item.get("exchange_symbol_checked", "")).strip().upper()
+                    if mapped != checked:
+                        replay_pairs.add((pd.Timestamp(day_value).date().isoformat(), symbol_value))
+            if replay_pairs:
+                replay_days = {day for day, _ in replay_pairs}
+                old_count = len(absence_exceptions)
+                absence_exceptions = [
+                    item for item in absence_exceptions
+                    if (str(item.get("date")), str(item.get("symbol", "")).strip().upper()) not in replay_pairs
+                ]
+                attempted_date_values.difference_update(replay_days)
+                completed_date_values.difference_update(replay_days)
+                completed = len(attempted_date_values)
+                print(json.dumps({
+                    "symbol_map_changed": True,
+                    "targeted_absence_pairs_requeued": len(replay_pairs),
+                    "dates_requeued": len(replay_days),
+                    "old_absence_rows": old_count,
+                    "remaining_prior_absence_rows": len(absence_exceptions),
+                }), flush=True)
+
             existing.update((pd.Timestamp(row["date"]), str(row.get("requested_symbol", row["symbol"])).upper()) for row in additions)
             existing_raw_keys.update((pd.Timestamp(row["date"]), str(row["symbol"]).upper()) for row in additions)
             existing.update((pd.Timestamp(row["date"]), str(row.get("requested_symbol", row["symbol"])).upper()) for row in absence_exceptions)
-            print(f"Resuming repair: {completed}/{len(all_days)} successful dates; {len(additions)} persisted rows.", flush=True)
+            print(f"Resuming repair: {completed}/{len(all_days)} attempted dates; {len(additions)} persisted rows.", flush=True)
 
     def write_checkpoint():
         # Small, durable progress record so a runner interruption is diagnosable.
@@ -381,6 +419,7 @@ def main():
             "date_end": str(end.date()),
             "membership_warmup_sessions": int(a.membership_warmup_sessions),
             "target_inventory_sha256": target_inventory_hash,
+            "symbol_map_sha256": symbol_map_hash,
             "completed_date_values": sorted(completed_date_values),
             "attempted_date_values": sorted(attempted_date_values),
             "targeted_gap_spans": int(len(gap_spans)),
@@ -641,6 +680,11 @@ def main():
         "date_end": str(end.date()),
         "calendar_sessions": int(len(calendar)),
         "minimum_internal_gap_sessions_targeted": int(a.min_gap_sessions),
+        "symbol_lineage": {
+            "rows": int(len(rename_rows)),
+            "sha256": symbol_map_hash,
+            "supplemental_file": str(a.symbol_map_supplement),
+        },
         "membership_scope": {
             "membership_file": str(membership_path),
             "warmup_sessions_before_membership": int(a.membership_warmup_sessions),
