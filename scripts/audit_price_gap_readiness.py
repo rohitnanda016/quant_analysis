@@ -12,8 +12,10 @@ import pandas as pd
 
 try:
     from scripts.membership_scope import build_membership_session_windows, in_membership_research_window
+    from scripts.symbol_lineage import load_symbol_rename_rows
 except ModuleNotFoundError:
     from membership_scope import build_membership_session_windows, in_membership_research_window
+    from symbol_lineage import load_symbol_rename_rows
 
 PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
 
@@ -43,6 +45,7 @@ def main():
     ap.add_argument("--report", required=True)
     ap.add_argument("--min-gap-sessions", type=int, default=10)
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
+    ap.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
     ap.add_argument("--membership", default="data/input/nifty500_membership.csv")
     ap.add_argument("--membership-warmup-sessions", type=int, default=252)
     args = ap.parse_args()
@@ -103,15 +106,10 @@ def main():
     no_trade = set(zip(nt["date"], nt["symbol"]))
 
     aliases = {}
-    alias_path = Path(args.symbol_map)
-    if alias_path.exists():
-        amap = pd.read_csv(alias_path)
-        for z in amap.itertuples():
-            old = str(getattr(z, "old_symbol", "")).strip().upper()
-            new = str(getattr(z, "new_symbol", "")).strip().upper()
-            if old and new and old != "NAN" and new != "NAN":
-                aliases[old] = new
-                aliases[new] = new
+    rename_rows = load_symbol_rename_rows(args.symbol_map, args.symbol_map_supplement)
+    for old, new, _effective in rename_rows:
+        aliases[old] = new
+        aliases[new] = new
     def terminal_alias(value):
         value = str(value).strip().upper()
         seen = set()
@@ -261,6 +259,10 @@ def main():
             "pairs_excluded_outside_membership_window": int(excluded_gap_pairs_outside_membership_window),
         },
         "price_series_policy": "EQ preferred; observed BE/BZ closes count as price continuity with source series preserved. BE/BZ tradability is not assumed.",
+        "symbol_lineage": {
+            "rows": int(len(rename_rows)),
+            "supplemental_file": str(args.symbol_map_supplement),
+        },
         "raw_rows": int(len(p)),
         "symbols": int(p[source_symbol].nunique()),
         "repair": {
