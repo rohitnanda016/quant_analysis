@@ -93,6 +93,12 @@ def parse_security_history(payload, requested_symbol=None):
                 rename[cols[candidate]] = target
                 break
     raw = raw.rename(columns=rename)
+    # An explicit empty JSON data array is a valid zero-row response, but it
+    # contains no evidence for a no-trade disposition. Keep it empty so the
+    # caller classifies the target as unverified. CSV payloads without the
+    # minimum schema remain parser errors.
+    if raw.empty and not len(raw.columns):
+        return pd.DataFrame(columns=["symbol", "series", "date", "close"])
     need = {"series", "date", "close"}
     if not need.issubset(raw.columns):
         raise ValueError(f"missing required columns {sorted(need - set(raw.columns))}; got {list(raw.columns)}")
