@@ -138,6 +138,24 @@ def classify_target_date(history, target_date):
     return "unverified", history.iloc[0:0].copy()
 
 
+def select_target_probe(probes, target_date):
+    """Choose a single valid NSE response that can resolve a target date.
+
+    NSE sometimes returns truncated history for a broad date range. A partial
+    response must not prevent narrower probes from running, and observations
+    from separate responses are never stitched together to infer no-trade.
+    """
+    last = None
+    for probe in probes:
+        outcome, exact = classify_target_date(probe["history"], target_date)
+        last = (probe, outcome, exact)
+        if outcome in {"observed_price", "verified_no_trade"}:
+            return last
+    if last is not None:
+        return last
+    return None, "unverified", pd.DataFrame(columns=["symbol", "series", "date", "close"])
+
+
 def _date_key(series):
     return pd.to_datetime(series, errors="coerce", format="mixed").dt.strftime("%Y-%m-%d")
 
@@ -204,39 +222,11 @@ def main():
             "symbol": exchange, "from": start.strftime("%d-%m-%Y"), "to": end.strftime("%d-%m-%Y"),
             "series": "EQ", "type": "priceVolumeDeliverable", "csv": "true", "dataType": "priceVolumeDeliverable",
         }
-        response, error = None, ""
         attempts = []
-        # Try CSV first, but NSE's endpoint also returns a JSON object/array
-        # for the same query on some sessions. Accept only an explicit data
-        # response; an empty or malformed response must remain unverified.
-        # Probe short, targeted windows around the missing date. The NSE
-        # history endpoint has returned truncated CSV windows in some cases;
-        # shorter windows can recover the bracketing trading sessions without
-        # interpreting absent rows as no-trade.
-        start_offsets = [max(1, a.window_days), 2, 1]
-        request_variants = []
-        seen_ranges = set()
-        for radius in start_offsets:
-            range_start = target - pd.Timedelta(days=radius)
-            range_end = target + pd.Timedelta(days=radius)
-            date_range = (range_start.strftime("%d-%m-%Y"), range_end.strftime("%d-%m-%Y"))
-            if date_range not in seen_ranges:
-                seen_ranges.add(date_range)
-                for accept, remove_fields in [
-                    ("text/csv,application/json,*/*", set()),
-                    ("application/json,*/*", {"csv", "dataType"}),
-                ]:
-                    request_params = {
-                        **params,
-                        "from": date_range[0],
-                        "to": date_range[1],
-                    }
-                    for field in remove_fields:
-                        request_params.pop(field, None)
-                    request_variants.append((request_params, accept))
+        probe_results = []
+        last_error = ""
+        request_diagnostics = []
         for variant_params, accept in request_variants:
-            if response is not None:
-                break
             for attempt in range(max(1, a.retries)):
                 try:
                     trial = session.get(
@@ -246,45 +236,91 @@ def main():
                     content_type = trial.headers.get("content-type", "").lower()
                     if trial.status_code == 200 and (
                         "text/csv" in content_type or "application/json" in content_type
-                    ):
-                        if trial.text.strip() and not trial.text.lstrip().lower().startswith(("<html", "<!doctype")):
-                            response = trial
+                    ) and trial.text.strip() and not trial.text.lstrip().lower().startswith(("<html", "<!doctype")):
+                        try:
+                            candidate_history = parse_security_history(trial.text, requested_symbol=exchange)
+                        except Exception as parse_error:
+                            last_error = f"parse error: {parse_error}"
+                            attempts.append({
+                                "url": trial.url, "variant": "csv" if "csv" in accept else "json",
+                                "attempt": attempt + 1, "error": last_error,
+                            })
+                            # Try a different query variant/window; a malformed
+                            # response is not evidence for either price or no-trade.
                             break
-                    error = f"HTTP {trial.status_code}; content-type={content_type}; bytes={len(trial.content)}"
-                except requests.RequestException as exc_error:
-                    error = repr(exc_error)
-                attempts.append({"variant": "csv" if "csv" in accept else "json", "attempt": attempt + 1, "error": error})
+                        dates_returned = [
+                            d.date().isoformat()
+                            for d in candidate_history["date"].drop_duplicates().sort_values()
+                        ]
+                        diagnostic = {
+                            "url": trial.url,
+                            "http_status": int(trial.status_code),
+                            "content_type": content_type,
+                            "response_bytes": len(trial.content),
+                            "response_sha256": hashlib.sha256(trial.content).hexdigest(),
+                            "rows_returned": int(len(candidate_history)),
+                            "returned_dates": dates_returned,
+                            "variant": "csv" if "csv" in accept else "json",
+                        }
+                        request_diagnostics.append(diagnostic)
+                        probe_results.append({
+                            "response": trial,
+                            "history": candidate_history,
+                            "diagnostic": diagnostic,
+                        })
+                        selected_probe, selected_outcome, _ = select_target_probe(probe_results, target)
+                        if selected_outcome in {"observed_price", "verified_no_trade"}:
+                            break
+                        # This payload parsed but is insufficient (for example,
+                        # only pre-target rows); continue to the narrower window.
+                        break
+                    last_error = (
+                        f"HTTP {trial.status_code}; content-type={content_type}; bytes={len(trial.content)}"
+                    )
+                    attempts.append({
+                        "url": trial.url, "variant": "csv" if "csv" in accept else "json",
+                        "attempt": attempt + 1, "error": last_error,
+                    })
+                except requests.RequestException as request_error:
+                    last_error = repr(request_error)
+                    attempts.append({
+                        "url": requests.Request(API, params=variant_params).prepare().url,
+                        "variant": "csv" if "csv" in accept else "json",
+                        "attempt": attempt + 1, "error": last_error,
+                    })
                 if attempt + 1 < max(1, a.retries):
                     time.sleep(attempt + 1)
-        if response is None:
-            error = error or "NSE security-history endpoint returned no usable CSV/JSON payload"
+            selected_probe, selected_outcome, selected_exact = select_target_probe(probe_results, target)
+            if selected_probe is not None and selected_outcome in {"observed_price", "verified_no_trade"}:
+                break
+
         check = {
             "date": target.date().isoformat(), "symbol": wanted, "exchange_symbol_queried": exchange,
             "query_from": start.date().isoformat(), "query_to": end.date().isoformat(),
-            "query_url": response.url if response is not None else requests.Request(API, params=params).prepare().url,
-            "outcome": "unverified", "error": error,
+            "query_url": selected_probe["response"].url if selected_probe is not None else requests.Request(API, params=params).prepare().url,
+            "outcome": selected_outcome if selected_probe is not None else "unverified",
+            "error": "" if selected_probe is not None else (last_error or "NSE security-history endpoint returned no usable CSV/JSON payload"),
+            "probe_count": len(probe_results),
+            "probes": request_diagnostics,
+            "attempt_errors": attempts,
         }
-        if response is None:
+        if selected_probe is None:
             remaining.append(exc.to_dict())
             checks.append(check)
             time.sleep(max(0, a.pause_seconds))
             continue
+
+        response = selected_probe["response"]
+        history = selected_probe["history"]
+        outcome = selected_outcome
+        exact = selected_exact
         check.update({
-            "http_status": int(response.status_code), "response_bytes": len(response.content),
+            "http_status": int(response.status_code),
+            "response_bytes": len(response.content),
             "response_sha256": hashlib.sha256(response.content).hexdigest(),
+            "rows_returned": int(len(history)),
+            "returned_dates": [d.date().isoformat() for d in history["date"].drop_duplicates().sort_values()],
         })
-        try:
-            history = parse_security_history(response.text, requested_symbol=exchange)
-        except Exception as parse_error:
-            check["error"] = f"parse error: {parse_error}"
-            remaining.append(exc.to_dict())
-            checks.append(check)
-            time.sleep(max(0, a.pause_seconds))
-            continue
-        check["rows_returned"] = int(len(history))
-        check["returned_dates"] = [d.date().isoformat() for d in history["date"].drop_duplicates().sort_values()]
-        outcome, exact = classify_target_date(history, target)
-        check["outcome"] = outcome
         pair = (target.date().isoformat(), wanted)
         if outcome == "observed_price" and pair not in existing:
             if len(exact) != 1:
