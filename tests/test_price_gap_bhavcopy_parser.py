@@ -109,6 +109,20 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(list(history["date"].dt.strftime("%Y-%m-%d")), ["2024-10-28", "2024-10-31"])
         self.assertEqual(list(history["close"]), [10050.0, 10100.0])
 
+    def test_security_history_timezone_stamps_compare_by_exchange_calendar_date(self):
+        payload = json.dumps({"data": [
+            {"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ",
+             "CH_TIMESTAMP": "2024-10-27T18:30:00.000Z",
+             "CH_CLOSING_PRICE": "10600", "CH_TOT_TRADED_QTY": "1000"},
+            {"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ",
+             "CH_TIMESTAMP": "2024-10-29T18:30:00.000Z",
+             "CH_CLOSING_PRICE": "10650", "CH_TOT_TRADED_QTY": "1100"},
+        ]})
+        history = parse_security_history(payload)
+        outcome, exact = classify_target_date(history, "2024-10-28")
+        self.assertEqual(outcome, "verified_no_trade")
+        self.assertTrue(exact.empty)
+
     def test_security_history_parser_fails_closed_on_json_without_date_series_close(self):
         payload = json.dumps({"data": [{"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ"}]})
         with self.assertRaises(ValueError):
