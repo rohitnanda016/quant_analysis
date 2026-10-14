@@ -162,11 +162,35 @@ class ParseBhavcopyTests(unittest.TestCase):
             requested_symbol="DYNAMATECH",
         )
         probes = [
-            {"url": "broad-window", "history": partial},
-            {"url": "narrow-window", "history": bracketed},
+            {"url": "broad-window", "history": partial, "radius_days": 5},
+            {"url": "narrow-window", "history": bracketed, "radius_days": 1},
         ]
 
         selected, outcome, exact = select_target_probe(probes, "2014-05-08")
+
+        self.assertEqual(outcome, "verified_no_trade")
+        self.assertEqual(selected["url"], "narrow-window")
+        self.assertTrue(exact.empty)
+
+    def test_broad_bracketing_response_is_not_enough_to_verify_no_trade(self):
+        broad = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"EQ","25-Oct-2024","10888.10"\n'
+            '"EQ","29-Oct-2024","10355.00"',
+            requested_symbol="MAHSCOOTER",
+        )
+        narrow = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"EQ","25-Oct-2024","10888.10"\n'
+            '"EQ","29-Oct-2024","10355.00"',
+            requested_symbol="MAHSCOOTER",
+        )
+        probes = [
+            {"url": "broad-window", "history": broad, "radius_days": 5},
+            {"url": "narrow-window", "history": narrow, "radius_days": 3},
+        ]
+
+        selected, outcome, exact = select_target_probe(probes, "2024-10-28")
 
         self.assertEqual(outcome, "verified_no_trade")
         self.assertEqual(selected["url"], "narrow-window")
