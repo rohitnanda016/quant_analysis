@@ -10,6 +10,7 @@ on:
       - "data/reference/nse_historical_symbol_changes.csv"
       - "data/reference/verified_no_trade_evidence.csv"
       - "tests/test_price_gap_bhavcopy_parser.py"
+      - "scripts/repair_missing_pairs_security_history.py"
   workflow_dispatch:
 
 permissions:
