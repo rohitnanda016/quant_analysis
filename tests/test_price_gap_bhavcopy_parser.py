@@ -96,6 +96,30 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(outcome, "verified_no_trade")
         self.assertTrue(exact.empty)
 
+    def test_security_history_parser_accepts_json_camel_case_with_symbol(self):
+        payload = json.dumps({"data": [
+            {"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ", "CH_TIMESTAMP": "28-Oct-2024",
+             "CH_CLOSING_PRICE": "10050", "CH_TOT_TRADED_QTY": "1500"},
+            {"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ", "CH_TIMESTAMP": "31-Oct-2024",
+             "CH_CLOSING_PRICE": "10100", "CH_TOT_TRADED_QTY": "1700"},
+        ]})
+        history = parse_security_history(payload)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(set(history["symbol"]), {"MAHSCOOTER"})
+        self.assertEqual(list(history["date"].dt.strftime("%Y-%m-%d")), ["2024-10-28", "2024-10-31"])
+        self.assertEqual(list(history["close"]), [10050.0, 10100.0])
+
+    def test_security_history_parser_fails_closed_on_json_without_date_series_close(self):
+        payload = json.dumps({"data": [{"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ"}]})
+        with self.assertRaises(ValueError):
+            parse_security_history(payload, requested_symbol="MAHSCOOTER")
+
+    def test_security_history_parser_rejects_empty_json_rows_for_no_trade(self):
+        payload = json.dumps({"data": []})
+        history = parse_security_history(payload, requested_symbol="DYNAMATECH")
+        outcome, _ = classify_target_date(history, "2014-05-08")
+        self.assertEqual(outcome, "unverified")
+
     def test_security_history_parser_requires_trading_sessions_around_no_trade_date(self):
         csv = (
             '"Symbol  ","Series  ","Date  ","Prev Close  ","Open Price  ","High Price  ","Low Price  ","'
