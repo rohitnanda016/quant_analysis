@@ -209,10 +209,31 @@ def main():
         # Try CSV first, but NSE's endpoint also returns a JSON object/array
         # for the same query on some sessions. Accept only an explicit data
         # response; an empty or malformed response must remain unverified.
-        request_variants = [
-            (params, "text/csv,application/json,*/*"),
-            ({k: v for k, v in params.items() if k not in {"csv", "dataType"}}, "application/json,*/*"),
-        ]
+        # Probe short, targeted windows around the missing date. The NSE
+        # history endpoint has returned truncated CSV windows in some cases;
+        # shorter windows can recover the bracketing trading sessions without
+        # interpreting absent rows as no-trade.
+        start_offsets = [max(1, a.window_days), 2, 1]
+        request_variants = []
+        seen_ranges = set()
+        for radius in start_offsets:
+            range_start = target - pd.Timedelta(days=radius)
+            range_end = target + pd.Timedelta(days=radius)
+            date_range = (range_start.strftime("%d-%m-%Y"), range_end.strftime("%d-%m-%Y"))
+            if date_range not in seen_ranges:
+                seen_ranges.add(date_range)
+                for accept, remove_fields in [
+                    ("text/csv,application/json,*/*", set()),
+                    ("application/json,*/*", {"csv", "dataType"}),
+                ]:
+                    request_params = {
+                        **params,
+                        "from": date_range[0],
+                        "to": date_range[1],
+                    }
+                    for field in remove_fields:
+                        request_params.pop(field, None)
+                    request_variants.append((request_params, accept))
         for variant_params, accept in request_variants:
             if response is not None:
                 break
