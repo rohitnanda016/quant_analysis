@@ -26,7 +26,7 @@ from scripts.run_fluidq_backtest import (
     load_membership, normalize_price_series, eq_tradable_rows, prepare_price_identity,
 )
 from scripts.symbol_lineage import load_symbol_rename_rows, symbol_map_fingerprint
-from scripts.repair_missing_pairs_security_history import parse_security_history, classify_target_date
+from scripts.repair_missing_pairs_security_history import parse_security_history, classify_target_date, select_target_probe
 
 
 class ParseBhavcopyTests(unittest.TestCase):
@@ -134,6 +134,29 @@ class ParseBhavcopyTests(unittest.TestCase):
         before_only = history.loc[history["date"].lt(pd.Timestamp("2014-05-08"))]
         outcome, _ = classify_target_date(before_only, "2014-05-08")
         self.assertEqual(outcome, "unverified")
+
+    def test_truncated_nse_history_does_not_block_narrower_bracketing_probe(self):
+        partial = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"EQ","07-May-2014","101"',
+            requested_symbol="DYNAMATECH",
+        )
+        bracketed = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"EQ","07-May-2014","101"\n'
+            '"EQ","09-May-2014","102"',
+            requested_symbol="DYNAMATECH",
+        )
+        probes = [
+            {"url": "broad-window", "history": partial},
+            {"url": "narrow-window", "history": bracketed},
+        ]
+
+        selected, outcome, exact = select_target_probe(probes, "2014-05-08")
+
+        self.assertEqual(outcome, "verified_no_trade")
+        self.assertEqual(selected["url"], "narrow-window")
+        self.assertTrue(exact.empty)
 
     def test_security_history_target_row_with_blank_close_is_not_no_trade(self):
         csv = (
