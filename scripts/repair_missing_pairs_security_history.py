@@ -261,7 +261,7 @@ def main():
         # Probe broad-to-narrow windows. The NSE endpoint can truncate a broad
         # response, so an earlier valid-but-partial payload must not suppress
         # later probes.
-        start_offsets = [max(1, a.window_days), 2, 1]
+        start_offsets = [max(1, a.window_days), 3, 2, 1]
         request_variants = []
         seen_ranges = set()
         for radius in start_offsets:
