@@ -119,9 +119,28 @@ def parse_security_history(payload, requested_symbol=None):
     raw = raw.loc[raw["series"].eq("EQ")].copy()
     return raw.sort_values(["date", "symbol"]).reset_index(drop=True)
 
+def _exchange_calendar_dates(values):
+    """Normalize date-like source values to naive exchange calendar dates.
+
+    The NSE endpoint has emitted both date-only strings and ISO timestamps
+    with timezone suffixes. For daily price records the source calendar date,
+    not a UTC-converted instant, is the relevant key.
+    """
+    def as_calendar_date(value):
+        if pd.isna(value):
+            return pd.NaT
+        parsed = pd.to_datetime(value, errors="coerce", format="mixed", dayfirst=True)
+        if pd.isna(parsed):
+            return pd.NaT
+        # Keep the date represented in the source value even if it carries a
+        # timezone; do not convert midnight UTC to the prior Indian calendar day.
+        return pd.Timestamp(parsed.date())
+    return pd.to_datetime(values.map(as_calendar_date), errors="coerce").dt.normalize()
+
+
 def classify_target_date(history, target_date):
-    target = pd.Timestamp(target_date).normalize()
-    dates = pd.to_datetime(history["date"], errors="coerce").dt.normalize()
+    target = pd.Timestamp(target_date).tz_localize(None).normalize() if pd.Timestamp(target_date).tzinfo else pd.Timestamp(target_date).normalize()
+    dates = _exchange_calendar_dates(history["date"])
     exact = history.loc[dates.eq(target)]
     if not exact.empty:
         valid_close = exact["close"].notna() & exact["close"].gt(0)
