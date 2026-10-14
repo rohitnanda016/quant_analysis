@@ -199,17 +199,38 @@ def main():
             "series": "EQ", "type": "priceVolumeDeliverable", "csv": "true", "dataType": "priceVolumeDeliverable",
         }
         response, error = None, ""
-        for attempt in range(max(1, a.retries)):
-            try:
-                trial = session.get(API, params=params, timeout=45)
-                if trial.status_code == 200 and "text/csv" in trial.headers.get("content-type", "").lower():
-                    response = trial
-                    break
-                error = f"HTTP {trial.status_code}; content-type={trial.headers.get('content-type', '')}"
-            except requests.RequestException as exc_error:
-                error = repr(exc_error)
-            if attempt + 1 < max(1, a.retries):
-                time.sleep(attempt + 1)
+        attempts = []
+        # Try CSV first, but NSE's endpoint also returns a JSON object/array
+        # for the same query on some sessions. Accept only an explicit data
+        # response; an empty or malformed response must remain unverified.
+        request_variants = [
+            (params, "text/csv,application/json,*/*"),
+            ({k: v for k, v in params.items() if k not in {"csv", "dataType"}}, "application/json,*/*"),
+        ]
+        for variant_params, accept in request_variants:
+            if response is not None:
+                break
+            for attempt in range(max(1, a.retries)):
+                try:
+                    trial = session.get(
+                        API, params=variant_params,
+                        headers={"Accept": accept}, timeout=45
+                    )
+                    content_type = trial.headers.get("content-type", "").lower()
+                    if trial.status_code == 200 and (
+                        "text/csv" in content_type or "application/json" in content_type
+                    ):
+                        if trial.text.strip() and not trial.text.lstrip().lower().startswith(("<html", "<!doctype")):
+                            response = trial
+                            break
+                    error = f"HTTP {trial.status_code}; content-type={content_type}; bytes={len(trial.content)}"
+                except requests.RequestException as exc_error:
+                    error = repr(exc_error)
+                attempts.append({"variant": "csv" if "csv" in accept else "json", "attempt": attempt + 1, "error": error})
+                if attempt + 1 < max(1, a.retries):
+                    time.sleep(attempt + 1)
+        if response is None:
+            error = error or "NSE security-history endpoint returned no usable CSV/JSON payload"
         check = {
             "date": target.date().isoformat(), "symbol": wanted, "exchange_symbol_queried": exchange,
             "query_from": start.date().isoformat(), "query_to": end.date().isoformat(),
