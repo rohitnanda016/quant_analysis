@@ -81,6 +81,21 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(len(frame), 3)
         self.assertEqual(frame.loc[frame["series"].eq("BE"), "close"].iloc[0], 103)
 
+    def test_security_history_parser_uses_requested_symbol_when_nse_omits_symbol_column(self):
+        csv = (
+            '"CH_SERIES","CH_TIMESTAMP","CH_PREVIOUS_CLS","CH_OPENING_PRICE",'
+            '"CH_TRADE_HIGH_PRICE","CH_TRADE_LOW_PRICE","CH_LAST_TRADED_PRICE",'
+            '"CH_CLOSING_PRICE","CH_TOT_TRADED_QTY"\n'
+            '"EQ","07-May-2014","100","100","102","99","101","101","1000"\n'
+            '"EQ","09-May-2014","101","101","103","100","102","102","1100"\n'
+        )
+        history = parse_security_history(csv, requested_symbol="DYNAMATECH")
+        self.assertEqual(set(history["symbol"]), {"DYNAMATECH"})
+        self.assertEqual(set(history["series"]), {"EQ"})
+        outcome, exact = classify_target_date(history, "2014-05-08")
+        self.assertEqual(outcome, "verified_no_trade")
+        self.assertTrue(exact.empty)
+
     def test_security_history_parser_requires_trading_sessions_around_no_trade_date(self):
         csv = (
             '"Symbol  ","Series  ","Date  ","Prev Close  ","Open Price  ","High Price  ","Low Price  ","'
