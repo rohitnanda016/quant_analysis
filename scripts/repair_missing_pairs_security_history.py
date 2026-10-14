@@ -222,6 +222,30 @@ def main():
             "symbol": exchange, "from": start.strftime("%d-%m-%Y"), "to": end.strftime("%d-%m-%Y"),
             "series": "EQ", "type": "priceVolumeDeliverable", "csv": "true", "dataType": "priceVolumeDeliverable",
         }
+        # Probe broad-to-narrow windows. The NSE endpoint can truncate a broad
+        # response, so an earlier valid-but-partial payload must not suppress
+        # later probes.
+        start_offsets = [max(1, a.window_days), 2, 1]
+        request_variants = []
+        seen_ranges = set()
+        for radius in start_offsets:
+            range_start = target - pd.Timedelta(days=radius)
+            range_end = target + pd.Timedelta(days=radius)
+            date_range = (range_start.strftime("%d-%m-%Y"), range_end.strftime("%d-%m-%Y"))
+            if date_range in seen_ranges:
+                continue
+            seen_ranges.add(date_range)
+            for accept, remove_fields in [
+                ("text/csv,application/json,*/*", set()),
+                ("application/json,*/*", {"csv", "dataType"}),
+            ]:
+                request_params = {**params, "from": date_range[0], "to": date_range[1]}
+                for field in remove_fields:
+                    request_params.pop(field, None)
+                request_variants.append((request_params, accept))
+        selected_probe = None
+        selected_outcome = "unverified"
+        selected_exact = pd.DataFrame(columns=["symbol", "series", "date", "close"])
         attempts = []
         probe_results = []
         last_error = ""
