@@ -32,7 +32,7 @@ def norm(value):
     return "_".join(value.lower().split())
 
 
-def parse_security_history(payload):
+def parse_security_history(payload, requested_symbol=None):
     """Return normalized date, symbol, series, OHLCV fields from the NSE CSV."""
     if not isinstance(payload, str) or not payload.strip():
         raise ValueError("empty API response")
@@ -41,16 +41,16 @@ def parse_security_history(payload):
     raw = pd.read_csv(io.StringIO(payload), skipinitialspace=True)
     cols = {norm(c): c for c in raw.columns}
     aliases = {
-        "symbol": ["symbol", "ticker_symbol"], "series": ["series", "security_series"],
-        "date": ["date", "trading_date"], "prev_close": ["prev_close", "previous_close"],
-        "open": ["open_price", "open"], "high": ["high_price", "high"],
-        "low": ["low_price", "low"], "last": ["last_price", "last"],
-        "close": ["close_price", "close"], "vwap": ["average_price", "avg_price", "vwap"],
-        "volume": ["total_traded_quantity", "total_traded_qty", "volume"],
-        "traded_value": ["turnover_₹", "turnover", "traded_value"],
-        "num_trades": ["no._of_trades", "no_of_trades", "num_trades"],
-        "deliverable_qty": ["deliverable_qty"],
-        "deliverable_pct": ["%_dly_qt_to_traded_qty", "dly_qt_to_traded_qty"],
+        "symbol": ["symbol", "ticker_symbol", "ch_symbol"], "series": ["series", "security_series", "ch_series"],
+        "date": ["date", "trading_date", "ch_timestamp"], "prev_close": ["prev_close", "previous_close", "ch_previous_cls"],
+        "open": ["open_price", "open", "ch_opening_price"], "high": ["high_price", "high", "ch_trade_high_price"],
+        "low": ["low_price", "low", "ch_trade_low_price"], "last": ["last_price", "last", "ch_last_traded_price"],
+        "close": ["close_price", "close", "ch_closing_price"], "vwap": ["average_price", "avg_price", "vwap", "ch_avg_price"],
+        "volume": ["total_traded_quantity", "total_traded_qty", "volume", "ch_tot_traded_qty"],
+        "traded_value": ["turnover_₹", "turnover", "traded_value", "ch_tot_traded_val"],
+        "num_trades": ["no._of_trades", "no_of_trades", "num_trades", "ch_total_trades"],
+        "deliverable_qty": ["deliverable_qty", "ch_deliv_qty"],
+        "deliverable_pct": ["%_dly_qt_to_traded_qty", "dly_qt_to_traded_qty", "ch_deliv_per"],
     }
     rename = {}
     for target, candidates in aliases.items():
@@ -59,9 +59,13 @@ def parse_security_history(payload):
                 rename[cols[candidate]] = target
                 break
     raw = raw.rename(columns=rename)
-    need = {"symbol", "series", "date", "close"}
+    need = {"series", "date", "close"}
     if not need.issubset(raw.columns):
         raise ValueError(f"missing required columns {sorted(need - set(raw.columns))}")
+    if "symbol" not in raw.columns:
+        if not requested_symbol:
+            raise ValueError("response omits symbol and no requested_symbol was supplied")
+        raw["symbol"] = str(requested_symbol).strip().upper()
     raw["symbol"] = raw["symbol"].astype(str).str.strip().str.upper()
     raw["series"] = raw["series"].astype(str).str.strip().str.upper()
     raw["date"] = pd.to_datetime(raw["date"], errors="coerce", format="mixed", dayfirst=True)
@@ -188,7 +192,7 @@ def main():
             "response_sha256": hashlib.sha256(response.content).hexdigest(),
         })
         try:
-            history = parse_security_history(response.text)
+            history = parse_security_history(response.text, requested_symbol=exchange)
         except Exception as parse_error:
             check["error"] = f"parse error: {parse_error}"
             remaining.append(exc.to_dict())
