@@ -165,11 +165,28 @@ def select_target_probe(probes, target_date):
     from separate responses are never stitched together to infer no-trade.
     """
     last = None
+    target = pd.Timestamp(target_date).tz_localize(None).normalize() if pd.Timestamp(target_date).tzinfo else pd.Timestamp(target_date).normalize()
     for probe in probes:
         outcome, exact = classify_target_date(probe["history"], target_date)
-        last = (probe, outcome, exact)
-        if outcome in {"observed_price", "verified_no_trade"}:
-            return last
+        if outcome == "observed_price":
+            return probe, outcome, exact
+        if outcome == "verified_no_trade":
+            # Do not accept a broad response as no-trade: a truncated payload
+            # could contain rows on both sides while omitting a real target row.
+            # Require a narrow (<=3 calendar days either side) query and nearby
+            # bracketing EQ prices from that same response.
+            history = probe["history"]
+            valid = history.loc[history["close"].notna() & history["close"].gt(0)].copy()
+            dates = _exchange_calendar_dates(valid["date"])
+            before = dates[dates.lt(target)]
+            after = dates[dates.gt(target)]
+            radius = int(probe.get("radius_days", 999))
+            if not before.empty and not after.empty and radius <= 3:
+                if (target - before.max()).days <= 3 and (after.min() - target).days <= 3:
+                    return probe, outcome, exact
+            last = (probe, "unverified", exact)
+        else:
+            last = (probe, outcome, exact)
     if last is not None:
         return last
     return None, "unverified", pd.DataFrame(columns=["symbol", "series", "date", "close"])
@@ -261,7 +278,7 @@ def main():
                 request_params = {**params, "from": date_range[0], "to": date_range[1]}
                 for field in remove_fields:
                     request_params.pop(field, None)
-                request_variants.append((request_params, accept))
+                request_variants.append((request_params, accept, radius))
         selected_probe = None
         selected_outcome = "unverified"
         selected_exact = pd.DataFrame(columns=["symbol", "series", "date", "close"])
@@ -269,7 +286,7 @@ def main():
         probe_results = []
         last_error = ""
         request_diagnostics = []
-        for variant_params, accept in request_variants:
+        for variant_params, accept, radius in request_variants:
             for attempt in range(max(1, a.retries)):
                 try:
                     trial = session.get(
@@ -304,12 +321,14 @@ def main():
                             "rows_returned": int(len(candidate_history)),
                             "returned_dates": dates_returned,
                             "variant": "csv" if "csv" in accept else "json",
+                            "probe_radius_days": radius,
                         }
                         request_diagnostics.append(diagnostic)
                         probe_results.append({
                             "response": trial,
                             "history": candidate_history,
                             "diagnostic": diagnostic,
+                            "radius_days": radius,
                         })
                         selected_probe, selected_outcome, _ = select_target_probe(probe_results, target)
                         if selected_outcome in {"observed_price", "verified_no_trade"}:
