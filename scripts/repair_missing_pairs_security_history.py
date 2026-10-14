@@ -33,24 +33,58 @@ def norm(value):
 
 
 def parse_security_history(payload, requested_symbol=None):
-    """Return normalized date, symbol, series, OHLCV fields from the NSE CSV."""
+    """Return normalized date, symbol, series, OHLCV fields from NSE CSV or JSON.
+
+    NSE's endpoint can return CSV columns (sometimes without a symbol column)
+    or a JSON envelope with camel-cased source fields. A response is accepted
+    only when dates, series and positive-close semantics can be evaluated;
+    an empty/partial response never establishes no-trade.
+    """
     if not isinstance(payload, str) or not payload.strip():
         raise ValueError("empty API response")
     if "<html" in payload[:1000].lower() or "<!doctype" in payload[:1000].lower():
         raise ValueError("API returned HTML instead of CSV")
-    raw = pd.read_csv(io.StringIO(payload), skipinitialspace=True)
-    cols = {norm(c): c for c in raw.columns}
+
+    # The endpoint has been observed to emit a JSON array/object despite a CSV
+    # request. Parse that format explicitly rather than treating it as a header.
+    stripped = payload.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            obj = __import__("json").loads(payload)
+            if isinstance(obj, dict):
+                records = obj.get("data", obj.get("rows", []))
+            else:
+                records = obj
+            if not isinstance(records, list):
+                raise ValueError("JSON response does not contain a row list")
+            raw = pd.DataFrame(records)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"invalid security-history JSON: {exc}") from exc
+    else:
+        raw = pd.read_csv(io.StringIO(payload), skipinitialspace=True)
+
+    def normalized_column(value):
+        # Normalize both spaced labels and source JSON keys such as CH_TIMESTAMP.
+        text = str(value).replace("\ufeff", "").replace("\xa0", " ").strip().strip('"')
+        return "_".join(text.lower().split())
+
+    cols = {normalized_column(c): c for c in raw.columns}
     aliases = {
-        "symbol": ["symbol", "ticker_symbol", "ch_symbol"], "series": ["series", "security_series", "ch_series"],
-        "date": ["date", "trading_date", "ch_timestamp"], "prev_close": ["prev_close", "previous_close", "ch_previous_cls"],
-        "open": ["open_price", "open", "ch_opening_price"], "high": ["high_price", "high", "ch_trade_high_price"],
-        "low": ["low_price", "low", "ch_trade_low_price"], "last": ["last_price", "last", "ch_last_traded_price"],
-        "close": ["close_price", "close", "ch_closing_price"], "vwap": ["average_price", "avg_price", "vwap", "ch_avg_price"],
+        "symbol": ["symbol", "ticker_symbol", "ch_symbol"],
+        "series": ["series", "security_series", "ch_series"],
+        "date": ["date", "trading_date", "ch_timestamp", "mtimestamp"],
+        "prev_close": ["prev_close", "previous_close", "ch_previous_cls", "ch_previous_cls_price"],
+        "open": ["open_price", "open", "ch_opening_price"],
+        "high": ["high_price", "high", "ch_trade_high_price"],
+        "low": ["low_price", "low", "ch_trade_low_price"],
+        "last": ["last_price", "last", "ch_last_traded_price"],
+        "close": ["close_price", "close", "ch_closing_price"],
+        "vwap": ["average_price", "avg_price", "vwap", "ch_avg_price"],
         "volume": ["total_traded_quantity", "total_traded_qty", "volume", "ch_tot_traded_qty"],
         "traded_value": ["turnover_₹", "turnover", "traded_value", "ch_tot_traded_val"],
         "num_trades": ["no._of_trades", "no_of_trades", "num_trades", "ch_total_trades"],
-        "deliverable_qty": ["deliverable_qty", "ch_deliv_qty"],
-        "deliverable_pct": ["%_dly_qt_to_traded_qty", "dly_qt_to_traded_qty", "ch_deliv_per"],
+        "deliverable_qty": ["deliverable_qty", "ch_deliv_qty", "cop_deliv_qty"],
+        "deliverable_pct": ["%_dly_qt_to_traded_qty", "dly_qt_to_traded_qty", "ch_deliv_per", "cop_deliv_perc"],
     }
     rename = {}
     for target, candidates in aliases.items():
@@ -61,11 +95,12 @@ def parse_security_history(payload, requested_symbol=None):
     raw = raw.rename(columns=rename)
     need = {"series", "date", "close"}
     if not need.issubset(raw.columns):
-        raise ValueError(f"missing required columns {sorted(need - set(raw.columns))}")
+        raise ValueError(f"missing required columns {sorted(need - set(raw.columns))}; got {list(raw.columns)}")
     if "symbol" not in raw.columns:
         if not requested_symbol:
             raise ValueError("response omits symbol and no requested_symbol was supplied")
         raw["symbol"] = str(requested_symbol).strip().upper()
+
     raw["symbol"] = raw["symbol"].astype(str).str.strip().str.upper()
     raw["series"] = raw["series"].astype(str).str.strip().str.upper()
     raw["date"] = pd.to_datetime(raw["date"], errors="coerce", format="mixed", dayfirst=True)
@@ -77,7 +112,6 @@ def parse_security_history(payload, requested_symbol=None):
     raw = raw.dropna(subset=["symbol", "date"])
     raw = raw.loc[raw["series"].eq("EQ")].copy()
     return raw.sort_values(["date", "symbol"]).reset_index(drop=True)
-
 
 def classify_target_date(history, target_date):
     target = pd.Timestamp(target_date).normalize()
