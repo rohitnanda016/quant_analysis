@@ -195,6 +195,18 @@ def select_target_probe(probes, target_date):
     # Search every probe/series for an actual target-date price before accepting
     # a no-trade candidate from any one series.
     if no_trade_candidate is not None:
+        queried_series = {
+            str(probe.get("query_series", "")).strip().upper()
+            for probe in probes
+            if str(probe.get("query_series", "")).strip()
+        }
+        required_series = {"EQ", "BE", "BZ"}
+        # A no-trade conclusion must not be made if any continuity series query
+        # failed to yield a valid response; otherwise a BE/BZ price could be missed.
+        if queried_series and not required_series.issubset(queried_series):
+            if last is not None:
+                return last
+            return None, "unverified", pd.DataFrame(columns=["symbol", "series", "date", "close"])
         return no_trade_candidate
     if last is not None:
         return last
@@ -335,6 +347,7 @@ def main():
                             "returned_dates": dates_returned,
                             "variant": "csv" if "csv" in accept else "json",
                             "probe_radius_days": radius,
+                            "query_series": query_series,
                         }
                         request_diagnostics.append(diagnostic)
                         probe_results.append({
@@ -342,6 +355,7 @@ def main():
                             "history": candidate_history,
                             "diagnostic": diagnostic,
                             "radius_days": radius,
+                            "query_series": query_series,
                         })
                         selected_probe, selected_outcome, _ = select_target_probe(probe_results, target)
                         if selected_outcome == "observed_price":

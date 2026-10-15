@@ -119,7 +119,7 @@ class ParseBhavcopyTests(unittest.TestCase):
              "CH_CLOSING_PRICE": "10650", "CH_TOT_TRADED_QTY": "1100"},
         ]})
         history = parse_security_history(payload)
-        outcome, exact = classify_target_date(history, "2024-10-28")
+        outcome, exact = classify_target_date(history, "2024-10-29")
         self.assertEqual(outcome, "verified_no_trade")
         self.assertTrue(exact.empty)
 
