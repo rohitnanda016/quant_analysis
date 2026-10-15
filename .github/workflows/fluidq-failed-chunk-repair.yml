@@ -1,11 +1,11 @@
 name: FLUID-Q Failed Chunk Repair
 
 on:
-  push:
-    paths:
-      - "scripts/repair_failed_chunks.py"
-      - ".github/workflows/fluidq-failed-chunk-repair.yml"
-
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "Full-history artifact run ID to repair; this step only retries named failed chunks"
+        required: true
 permissions:
   actions: read
   contents: read
@@ -24,9 +24,9 @@ jobs:
       - name: Download prior full-history artifact
         uses: actions/download-artifact@v5
         with:
-          name: fluidq-full-history-36806513002
+          name: fluidq-full-history-${{ inputs.base_run_id }}
           path: base_artifact
-          run-id: 36806513002
+          run-id: ${{ inputs.base_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore prior dataset
         run: |
@@ -112,7 +112,7 @@ jobs:
       - name: Upload repaired dataset
         uses: actions/upload-artifact@v4
         with:
-          name: fluidq-full-history-repaired-36806513002
+          name: fluidq-full-history-repaired-${{ inputs.base_run_id }}
           path: |
             data/raw/stage_a_prices.csv
             data/raw/stage_a_prices.repair.json

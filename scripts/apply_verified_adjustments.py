@@ -3,11 +3,17 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+try:
+    from scripts.symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+except ModuleNotFoundError:
+    from symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+
 p=argparse.ArgumentParser()
 p.add_argument("--prices",required=True)
 p.add_argument("--actions",required=True)
 p.add_argument("--out",required=True)
 p.add_argument("--symbol-map",default="")
+p.add_argument("--symbol-map-supplement",default="data/reference/nse_historical_symbol_changes.csv")
 a=p.parse_args()
 
 actions=pd.read_csv(a.actions)
@@ -18,15 +24,13 @@ actions=actions.dropna(subset=["symbol","ex_date","factor"])
 if (actions.factor<=0).any():
     raise SystemExit("Invalid adjustment factor generated")
 
-aliases={}
-if a.symbol_map and Path(a.symbol_map).exists():
-    sm=pd.read_csv(a.symbol_map)
-    for _,r in sm.iterrows():
-        old=str(r.get("old_symbol","")).strip().upper()
-        new=str(r.get("new_symbol","")).strip().upper()
-        if old and new and old!="NAN" and new!="NAN":
-            aliases[old]=new
-            aliases[new]=new
+base_symbol_map = a.symbol_map if a.symbol_map and Path(a.symbol_map).exists() else None
+if base_symbol_map or Path(a.symbol_map_supplement).exists():
+    aliases = terminal_symbol_aliases(
+        load_symbol_rename_rows(base_symbol_map, a.symbol_map_supplement)
+    )
+else:
+    aliases = {}
 
 actions=actions.sort_values(["symbol","ex_date"])
 events={s:(g.ex_date.to_numpy(),g.factor.to_numpy()) for s,g in actions.groupby("symbol")}

@@ -2,6 +2,11 @@ import argparse, re
 from pathlib import Path
 import pandas as pd
 
+try:
+    from scripts.symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+except ModuleNotFoundError:
+    from symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+
 def parse_factor(text):
     p = str(text or "").upper()
     parts = []
@@ -29,21 +34,14 @@ def parse_factor(text):
             kinds.append(kind)
     return factor, "+".join(kinds)
 
-def load_aliases(path):
-    df = pd.read_csv(path)
-    aliases = {}
-    for _, row in df.iterrows():
-        old = str(row.get("old_symbol", "")).strip().upper()
-        new = str(row.get("new_symbol", "")).strip().upper()
-        if old and new and old != "NAN" and new != "NAN":
-            aliases[old] = new
-            aliases[new] = new
-    return aliases
+def load_aliases(path, supplement):
+    return terminal_symbol_aliases(load_symbol_rename_rows(path, supplement))
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--actions", required=True)
     ap.add_argument("--symbol-map", required=True)
+    ap.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
     ap.add_argument("--supplemental", default="")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -65,7 +63,7 @@ def main():
     ca["action_type"] = parsed.map(lambda x: x[1])
     ca["factor_component"] = pd.to_numeric(ca["theoretical_factor"], errors="coerce")
 
-    aliases = load_aliases(args.symbol_map)
+    aliases = load_aliases(args.symbol_map, args.symbol_map_supplement)
     ca["lookup_symbol"] = ca["symbol"].map(lambda x: aliases.get(x, x))
 
     rows = []
