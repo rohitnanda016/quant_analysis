@@ -123,6 +123,27 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(outcome, "verified_no_trade")
         self.assertTrue(exact.empty)
 
+    def test_security_history_probe_prefers_price_in_alternate_series_over_no_trade_candidate(self):
+        eq = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"EQ","25-Oct-2024","10888.10"\n'
+            '"EQ","29-Oct-2024","10355.00"',
+            requested_symbol="MAHSCOOTER",
+        )
+        be = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"BE","28-Oct-2024","10689.80"',
+            requested_symbol="MAHSCOOTER",
+        )
+        probes = [
+            {"url": "eq-no-trade", "history": eq, "radius_days": 3},
+            {"url": "be-price", "history": be, "radius_days": 1},
+        ]
+        selected, outcome, exact = select_target_probe(probes, "2024-10-28")
+        self.assertEqual(outcome, "observed_price")
+        self.assertEqual(selected["url"], "be-price")
+        self.assertEqual(exact["series"].iloc[0], "BE")
+
     def test_security_history_parser_fails_closed_on_json_without_date_series_close(self):
         payload = json.dumps({"data": [{"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ"}]})
         with self.assertRaises(ValueError):

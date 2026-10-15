@@ -116,7 +116,7 @@ def parse_security_history(payload, requested_symbol=None):
         if col in raw:
             raw[col] = pd.to_numeric(raw[col].astype(str).str.replace(",", "", regex=False), errors="coerce")
     raw = raw.dropna(subset=["symbol", "date"])
-    raw = raw.loc[raw["series"].eq("EQ")].copy()
+    raw = raw.loc[raw["series"].isin({"EQ", "BE", "BZ"})].copy()
     return raw.sort_values(["date", "symbol"]).reset_index(drop=True)
 
 def _exchange_calendar_dates(values):
@@ -132,9 +132,12 @@ def _exchange_calendar_dates(values):
         parsed = pd.to_datetime(value, errors="coerce", format="mixed", dayfirst=True)
         if pd.isna(parsed):
             return pd.NaT
-        # Keep the date represented in the source value even if it carries a
-        # timezone; do not convert midnight UTC to the prior Indian calendar day.
-        return pd.Timestamp(parsed.date())
+        # NSE JSON timestamps can encode India midnight as the prior UTC date
+        # (for example 18:30Z). Convert timezone-aware values to exchange local
+        # time before extracting the trading date; leave date-only strings intact.
+        if parsed.tzinfo is not None:
+            parsed = parsed.tz_convert("Asia/Kolkata").tz_localize(None)
+        return pd.Timestamp(parsed).normalize()
     return pd.to_datetime(values.map(as_calendar_date), errors="coerce").dt.normalize()
 
 
@@ -165,6 +168,7 @@ def select_target_probe(probes, target_date):
     from separate responses are never stitched together to infer no-trade.
     """
     last = None
+    no_trade_candidate = None
     target = pd.Timestamp(target_date).tz_localize(None).normalize() if pd.Timestamp(target_date).tzinfo else pd.Timestamp(target_date).normalize()
     for probe in probes:
         outcome, exact = classify_target_date(probe["history"], target_date)
@@ -183,10 +187,15 @@ def select_target_probe(probes, target_date):
             radius = int(probe.get("radius_days", 999))
             if not before.empty and not after.empty and radius <= 3:
                 if (target - before.max()).days <= 3 and (after.min() - target).days <= 3:
-                    return probe, outcome, exact
+                    no_trade_candidate = (probe, outcome, exact)
+                    continue
             last = (probe, "unverified", exact)
         else:
             last = (probe, outcome, exact)
+    # Search every probe/series for an actual target-date price before accepting
+    # a no-trade candidate from any one series.
+    if no_trade_candidate is not None:
+        return no_trade_candidate
     if last is not None:
         return last
     return None, "unverified", pd.DataFrame(columns=["symbol", "series", "date", "close"])
@@ -263,22 +272,26 @@ def main():
         # later probes.
         start_offsets = [max(1, a.window_days), 3, 2, 1]
         request_variants = []
-        seen_ranges = set()
-        for radius in start_offsets:
-            range_start = target - pd.Timedelta(days=radius)
-            range_end = target + pd.Timedelta(days=radius)
-            date_range = (range_start.strftime("%d-%m-%Y"), range_end.strftime("%d-%m-%Y"))
-            if date_range in seen_ranges:
-                continue
-            seen_ranges.add(date_range)
-            for accept, remove_fields in [
-                ("text/csv,application/json,*/*", set()),
-                ("application/json,*/*", {"csv", "dataType"}),
-            ]:
-                request_params = {**params, "from": date_range[0], "to": date_range[1]}
-                for field in remove_fields:
-                    request_params.pop(field, None)
-                request_variants.append((request_params, accept, radius))
+        for query_series in ("EQ", "BE", "BZ"):
+            seen_ranges = set()
+            for radius in start_offsets:
+                range_start = target - pd.Timedelta(days=radius)
+                range_end = target + pd.Timedelta(days=radius)
+                date_range = (range_start.strftime("%d-%m-%Y"), range_end.strftime("%d-%m-%Y"))
+                if date_range in seen_ranges:
+                    continue
+                seen_ranges.add(date_range)
+                for accept, remove_fields in [
+                    ("text/csv,application/json,*/*", set()),
+                    ("application/json,*/*", {"csv", "dataType"}),
+                ]:
+                    request_params = {
+                        **params, "series": query_series,
+                        "from": date_range[0], "to": date_range[1],
+                    }
+                    for field in remove_fields:
+                        request_params.pop(field, None)
+                    request_variants.append((request_params, accept, radius, query_series))
         selected_probe = None
         selected_outcome = "unverified"
         selected_exact = pd.DataFrame(columns=["symbol", "series", "date", "close"])
@@ -286,7 +299,7 @@ def main():
         probe_results = []
         last_error = ""
         request_diagnostics = []
-        for variant_params, accept, radius in request_variants:
+        for variant_params, accept, radius, query_series in request_variants:
             for attempt in range(max(1, a.retries)):
                 try:
                     trial = session.get(
@@ -310,7 +323,7 @@ def main():
                             break
                         dates_returned = [
                             d.date().isoformat()
-                            for d in candidate_history["date"].drop_duplicates().sort_values()
+                            for d in _exchange_calendar_dates(candidate_history["date"]).drop_duplicates().sort_values()
                         ]
                         diagnostic = {
                             "url": trial.url,
@@ -331,7 +344,7 @@ def main():
                             "radius_days": radius,
                         })
                         selected_probe, selected_outcome, _ = select_target_probe(probe_results, target)
-                        if selected_outcome in {"observed_price", "verified_no_trade"}:
+                        if selected_outcome == "observed_price":
                             break
                         # This payload parsed but is insufficient (for example,
                         # only pre-target rows); continue to the narrower window.
@@ -353,7 +366,7 @@ def main():
                 if attempt + 1 < max(1, a.retries):
                     time.sleep(attempt + 1)
             selected_probe, selected_outcome, selected_exact = select_target_probe(probe_results, target)
-            if selected_probe is not None and selected_outcome in {"observed_price", "verified_no_trade"}:
+            if selected_probe is not None and selected_outcome == "observed_price":
                 break
 
         check = {
@@ -381,7 +394,10 @@ def main():
             "response_bytes": len(response.content),
             "response_sha256": hashlib.sha256(response.content).hexdigest(),
             "rows_returned": int(len(history)),
-            "returned_dates": [d.date().isoformat() for d in history["date"].drop_duplicates().sort_values()],
+            "returned_dates": [
+                d.date().isoformat()
+                for d in _exchange_calendar_dates(history["date"]).drop_duplicates().sort_values()
+            ],
         })
         pair = (target.date().isoformat(), wanted)
         if outcome == "observed_price" and pair not in existing:
@@ -412,8 +428,8 @@ def main():
         elif outcome == "observed_price" and pair in existing:
             check["outcome"] = "already_present"
         elif outcome == "verified_no_trade":
-            dates = pd.to_datetime(history["date"], errors="coerce").dt.normalize()
-            before, after = history.loc[dates.lt(target), "date"], history.loc[dates.gt(target), "date"]
+            dates = _exchange_calendar_dates(history["date"])
+            before, after = dates[dates.lt(target)], dates[dates.gt(target)]
             check["nearest_observation_before"] = before.max().date().isoformat() if not before.empty else None
             check["nearest_observation_after"] = after.min().date().isoformat() if not after.empty else None
             exists = (
