@@ -179,7 +179,7 @@ for row_idx in m.index[review_mask]:
     m.at[row_idx, "nearby_action_class"] = str(nearest["event_class"])
     m.at[row_idx, "nearby_action_factor"] = nearest["inferred_factor"]
 
-cols = ["symbol","date","prev_close","close","return","observed_factor","symbol_action","purpose","event_class","ex_date","record_date","face_value","inferred_factor","action_type","factor_error","status"]
+cols = ["symbol","date","prev_close","close","return","observed_factor","symbol_action","purpose","event_class","ex_date","record_date","face_value","inferred_factor","action_type","factor_error","status","nearby_action_date","nearby_action_distance_days","nearby_action_purpose","nearby_action_class","nearby_action_factor"]
 cols = [c for c in cols if c in m.columns]
 m[cols].sort_values(["date","symbol"]).to_csv(a.out, index=False)
 
