@@ -487,5 +487,27 @@ class ReferenceEvidenceLedgerTests(unittest.TestCase):
         self.assertTrue(approved["evidence_reference"].astype(str).str.startswith("http").all())
 
 
+class PriceQualityLineageTests(unittest.TestCase):
+    def test_extreme_return_uses_terminal_ticker_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prices = root / "prices.csv"
+            outdir = root / "quality"
+            pd.DataFrame([{
+                "date": "2020-01-02", "symbol": "CADILAHC",
+                "requested_symbol": "CADILAHC", "series": "EQ",
+                "prev_close": 1000, "open": 100, "high": 110,
+                "low": 90, "close": 100, "vwap": 100,
+                "volume": 100, "turnover ₹": 10000,
+            }]).to_csv(prices, index=False)
+            subprocess.run([
+                sys.executable, "scripts/audit_price_quality.py",
+                "--prices", str(prices), "--outdir", str(outdir),
+            ], check=True, capture_output=True, text=True)
+            extremes = pd.read_csv(outdir / "extreme_returns_raw.csv")
+            self.assertEqual(len(extremes), 1)
+            self.assertEqual(extremes.loc[0, "canonical_symbol"], "ZYDUSLIFE")
+
+
 if __name__ == "__main__":
     unittest.main()
