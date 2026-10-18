@@ -140,6 +140,45 @@ m.loc[exact_factor, "status"] = "EXACT_SPLIT_BONUS_RATIO_MATCH"
 m.loc[has & m["inferred_factor"].isna(), "status"] = "ACTION_ON_DATE_NON_PRICE_FACTOR"
 m.loc[has & m["inferred_factor"].notna() & (m["factor_error"] > 0.08), "status"] = "ACTION_RATIO_MISMATCH"
 
+# Add nearby corporate-action context for manual review. Do not promote a
+# nearby event to an exact match: ex-date proximity alone is not proof that
+# the event explains the observed price discontinuity.
+m["nearby_action_date"] = ""
+m["nearby_action_distance_days"] = pd.NA
+m["nearby_action_purpose"] = ""
+m["nearby_action_class"] = ""
+m["nearby_action_factor"] = pd.NA
+
+review_mask = m["status"].isin(["NO_EXACT_ACTION", "ACTION_RATIO_MISMATCH", "ACTION_ON_DATE_NON_PRICE_FACTOR"])
+nearby_index = {}
+for lookup_symbol, group in ca_group.dropna(subset=["ex_date"]).groupby("lookup_symbol", sort=False):
+    nearby_index[str(lookup_symbol)] = group.sort_values("ex_date")
+
+for row_idx in m.index[review_mask]:
+    symbol = str(m.at[row_idx, "lookup_symbol"])
+    event_date = m.at[row_idx, "date"]
+    candidates = nearby_index.get(symbol)
+    if candidates is None or pd.isna(event_date):
+        continue
+    delta = (candidates["ex_date"] - event_date).dt.days
+    nearby = candidates.loc[delta.abs().le(5)].copy()
+    if nearby.empty:
+        continue
+    nearby["_distance"] = (nearby["ex_date"] - event_date).dt.days
+    nearby["_abs_distance"] = nearby["_distance"].abs()
+    # Prefer the closest action; for ties prefer the one with a parsed factor.
+    nearby["_has_factor"] = nearby["inferred_factor"].notna().astype(int)
+    nearest = nearby.sort_values(
+        ["_abs_distance", "_has_factor", "ex_date"],
+        ascending=[True, False, True],
+        kind="stable",
+    ).iloc[0]
+    m.at[row_idx, "nearby_action_date"] = nearest["ex_date"].date().isoformat()
+    m.at[row_idx, "nearby_action_distance_days"] = int(nearest["_distance"])
+    m.at[row_idx, "nearby_action_purpose"] = str(nearest["purpose"])
+    m.at[row_idx, "nearby_action_class"] = str(nearest["event_class"])
+    m.at[row_idx, "nearby_action_factor"] = nearest["inferred_factor"]
+
 cols = ["symbol","date","prev_close","close","return","observed_factor","symbol_action","purpose","event_class","ex_date","record_date","face_value","inferred_factor","action_type","factor_error","status"]
 cols = [c for c in cols if c in m.columns]
 m[cols].sort_values(["date","symbol"]).to_csv(a.out, index=False)
