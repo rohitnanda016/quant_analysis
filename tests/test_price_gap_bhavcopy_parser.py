@@ -144,6 +144,22 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(selected["url"], "be-price")
         self.assertEqual(exact["series"].iloc[0], "BE")
 
+    def test_security_history_probe_rejects_rows_outside_requested_window(self):
+        inconsistent_json = parse_security_history(
+            '"CH_SERIES","CH_TIMESTAMP","CH_CLOSING_PRICE"\n'
+            '"BE","06-Apr-2014","100"\n'
+            '"BE","06-May-2014","101"\n'
+            '"BE","06-Jun-2014","102"',
+            requested_symbol="DYNAMATECH",
+        )
+        selected, outcome, _ = select_target_probe(
+            [{"url": "out-of-range-json", "history": inconsistent_json,
+              "radius_days": 1}],
+            "2014-05-08",
+        )
+        self.assertEqual(outcome, "unverified_out_of_range_dates")
+        self.assertEqual(selected["url"], "out-of-range-json")
+
     def test_security_history_parser_fails_closed_on_json_without_date_series_close(self):
         payload = json.dumps({"data": [{"CH_SYMBOL": "MAHSCOOTER", "CH_SERIES": "EQ"}]})
         with self.assertRaises(ValueError):
