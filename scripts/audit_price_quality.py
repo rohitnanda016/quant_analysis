@@ -54,22 +54,22 @@ for ch in pd.read_csv(a.prices,usecols=lambda c: c in cols,chunksize=250000,low_
     neg_turnover += int((ch["turnover_₹"]<0).sum())
     canonical=ch["canonical_symbol"].fillna(ch["symbol"]).astype(str).str.strip().str.upper()
     keys=canonical+"|"+ch["date"].astype(str)
-    for idx,key in keys.items():
-        # Invalid dates are reported independently; they must not all collapse
-        # into a false duplicate key such as SYMBOL|NaT.
-        if pd.isna(ch.loc[idx, "date"]):
-            continue
-        if key in seen:
-            duplicates += 1
-            if len(duplicate_examples)<10000:
-                duplicate_examples.append({
-                    "canonical_symbol": canonical.loc[idx], "date": str(ch.loc[idx,"date"]),
-                    "symbol": str(ch.loc[idx,"symbol"]),
-                    "series": str(ch.loc[idx,"series"]) if "series" in ch.columns else "",
-                    "close": ch.loc[idx,"close"] if "close" in ch.columns else None,
-                })
-        else:
-            seen.add(key)
+    # Vectorize duplicate detection while retaining cross-chunk state. The
+    # previous per-row .loc loop was quadratic-ish on large histories and made
+    # the readiness workflow appear stalled on ~2M-row inputs.
+    valid_keys = keys.loc[ch["date"].notna()]
+    duplicate_mask = valid_keys.duplicated(keep="first") | valid_keys.isin(seen)
+    duplicate_indices = valid_keys.index[duplicate_mask]
+    duplicates += int(duplicate_mask.sum())
+    if len(duplicate_indices) and len(duplicate_examples) < 10000:
+        remaining_slots = 10000 - len(duplicate_examples)
+        examples = ch.loc[duplicate_indices[:remaining_slots], [
+            c for c in ["canonical_symbol", "date", "symbol", "series", "close"]
+            if c in ch.columns
+        ]].copy()
+        examples["date"] = examples["date"].astype(str)
+        duplicate_examples.extend(examples.to_dict("records"))
+    seen.update(valid_keys.tolist())
     denom=ch["prev_close"].abs()
     ret=(ch["close"]/ch["prev_close"]-1).where(denom>0)
     ex=ch.loc[ret.abs()>a.extreme_pct,["canonical_symbol","symbol","date","prev_close","close"]].copy()
