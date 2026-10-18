@@ -171,7 +171,19 @@ def select_target_probe(probes, target_date):
     no_trade_candidate = None
     target = pd.Timestamp(target_date).tz_localize(None).normalize() if pd.Timestamp(target_date).tzinfo else pd.Timestamp(target_date).normalize()
     for probe in probes:
-        outcome, exact = classify_target_date(probe["history"], target_date)
+        history = probe["history"]
+        radius = int(probe.get("radius_days", 999))
+        # Reject API responses containing dates outside the requested calendar
+        # window. NSE's JSON variant has returned month/day rows inconsistent
+        # with the CSV variant; such a response cannot support price or no-trade.
+        returned_dates = _exchange_calendar_dates(history["date"]).dropna()
+        if not returned_dates.empty and (
+            (returned_dates < target - pd.Timedelta(days=radius)).any()
+            or (returned_dates > target + pd.Timedelta(days=radius)).any()
+        ):
+            last = (probe, "unverified_out_of_range_dates", history.iloc[0:0].copy())
+            continue
+        outcome, exact = classify_target_date(history, target_date)
         if outcome == "observed_price":
             return probe, outcome, exact
         if outcome == "verified_no_trade":
@@ -226,6 +238,7 @@ def main():
     p.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
     p.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
     p.add_argument("--audit-report", default="results/price_quality/security_history_gap_audit.json")
+    p.add_argument("--absences-report", default="results/price_quality/bhavcopy_repair_absences.csv")
     p.add_argument("--window-days", type=int, default=5)
     p.add_argument("--retries", type=int, default=3)
     p.add_argument("--pause-seconds", type=float, default=0.3)
@@ -451,14 +464,28 @@ def main():
                 & no_trade["symbol"].astype(str).str.strip().str.upper().eq(wanted)
             ).any() if not no_trade.empty else False
             if not exists:
-                new_no_trade.append({
-                    "date": target.date().isoformat(), "symbol": wanted, "exchange_symbol_checked": exchange,
-                    "series": "EQ", "status": "verified_no_trade",
-                    "verification_source": SOURCE + "; successful response has adjacent observations but no target-date row",
-                    "evidence_reference": check["query_url"],
-                })
+                # Bracketing observations prove only that this endpoint returned
+                # no row for the target date; they do not independently establish
+                # listing, suspension, or exchange-level no-trade status.
+                check["outcome"] = "candidate_no_trade_requires_independent_evidence"
+                remaining.append(exc.to_dict())
             else:
-                check["outcome"] = "already_verified_no_trade"
+                ledger_rows = no_trade.loc[
+                    _date_key(no_trade["date"]).eq(target.date().isoformat())
+                    & no_trade["symbol"].astype(str).str.strip().str.upper().eq(wanted)
+                ]
+                sources = ledger_rows.get("verification_source", pd.Series(dtype=str)).astype(str).str.lower()
+                refs = ledger_rows.get("evidence_reference", pd.Series(dtype=str)).astype(str).str.strip()
+                independent = (
+                    len(ledger_rows) > 0
+                    and refs.ne("").all()
+                    and not sources.str.contains("security-wise historical price-volume api", regex=False).any()
+                )
+                if independent:
+                    check["outcome"] = "already_verified_no_trade"
+                else:
+                    check["outcome"] = "candidate_no_trade_requires_independent_evidence"
+                    remaining.append(exc.to_dict())
         else:
             remaining.append(exc.to_dict())
         checks.append(check)
@@ -475,6 +502,20 @@ def main():
         no_trade.to_csv(no_trade_path, index=False)
     remaining_df = pd.DataFrame(remaining, columns=exceptions.columns)
     remaining_df.to_csv(exceptions_path, index=False)
+
+    # Keep the published archive-absence artifact synchronized with the final
+    # post-lineage/post-security-history exception set, not the earlier checkpoint.
+    absence_columns = [
+        "date", "symbol", "exchange_symbol_checked", "series", "status", "verification_source"
+    ]
+    absence_report = remaining_df.reindex(columns=absence_columns)
+    if not absence_report.empty:
+        absence_report["status"] = "unresolved_archive_absence"
+        absence_report["verification_source"] = (
+            "NSE bhavcopy has no matching EQ/BE/BZ price row; listing/suspension status needs independent verification"
+        )
+    Path(a.absences_report).parent.mkdir(parents=True, exist_ok=True)
+    absence_report.to_csv(a.absences_report, index=False)
 
     if repair_path.exists() and repair_path.stat().st_size:
         report = json.loads(repair_path.read_text())
