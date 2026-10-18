@@ -11,6 +11,14 @@ on:
       - "data/reference/verified_no_trade_evidence.csv"
       - "tests/test_price_gap_bhavcopy_parser.py"
       - "scripts/repair_missing_pairs_security_history.py"
+      - "scripts/repair_price_gaps_bhavcopy.py"
+      - "scripts/audit_price_quality.py"
+      - "scripts/audit_price_gap_readiness.py"
+      - "scripts/fetch_nse_corporate_actions.py"
+      - "scripts/reconcile_extreme_returns.py"
+      - "scripts/build_price_adjustment_actions.py"
+      - "scripts/apply_verified_adjustments.py"
+      - "scripts/audit_post_adjustment.py"
   workflow_dispatch:
 
 permissions:
