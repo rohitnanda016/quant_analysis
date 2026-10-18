@@ -470,5 +470,22 @@ class ParseBhavcopyTests(unittest.TestCase):
         self.assertEqual(set(result["close"]), {10, 11})
 
 
+class ReferenceEvidenceLedgerTests(unittest.TestCase):
+    def test_verified_no_trade_evidence_csv_has_stable_schema(self):
+        path = Path("data/reference/verified_no_trade_evidence.csv")
+        frame = pd.read_csv(path, low_memory=False)
+        self.assertEqual(
+            list(frame.columns),
+            [
+                "date", "symbol", "exchange_symbol_checked", "series",
+                "status", "verification_source", "evidence_reference",
+            ],
+        )
+        approved = frame[frame["status"].eq("verified_no_trade")]
+        self.assertTrue(approved["verification_source"].notna().all())
+        self.assertTrue(approved["evidence_reference"].notna().all())
+        self.assertTrue(approved["evidence_reference"].astype(str).str.startswith("http").all())
+
+
 if __name__ == "__main__":
     unittest.main()
