@@ -59,7 +59,7 @@ for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
     canonical = canonical.where(canonical.ne(""), ch["raw_symbol"])
     ch["canonical_symbol"] = canonical.map(lambda s: aliases.get(s, s))
     mapped_rows += int((ch["canonical_symbol"] != ch["raw_symbol"]).sum())
-    ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
+    # Match the mixed-format parser used by the raw quality audit; strict inference\n    # can coerce valid historical dates to NaT when a chunk contains mixed formats.\n    ch["date"] = pd.to_datetime(ch["date"], errors="coerce", format="mixed")
     if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns:
         ch["turnover_₹"]=ch["turnover ₹"]
     for c in price_cols+["prev_close","volume","turnover_₹"]:
