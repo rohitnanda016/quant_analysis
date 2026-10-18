@@ -51,8 +51,15 @@ jobs:
           last_seen = None
 
           while time.time() < deadline:
-              response = requests.get(f"{api}/actions/runs?per_page=100&branch=v1.2-factor-attribution",
-                                      headers=headers, timeout=30)
+              # Query the repair workflow directly. The global actions/runs
+              # endpoint is capped at the newest 100 runs; repeated fast-validation
+              # runs can push the latest repair checkpoint out of that page and
+              # leave this replay polling until timeout.
+              response = requests.get(
+                  f"{api}/actions/workflows/fluidq-targeted-price-repair.yml/runs"
+                  "?per_page=20&branch=v1.2-factor-attribution",
+                  headers=headers, timeout=30
+              )
               response.raise_for_status()
               runs = [r for r in response.json().get("workflow_runs", [])
                       if r.get("name") == "FLUID-Q Targeted Price Gap Repair"]
