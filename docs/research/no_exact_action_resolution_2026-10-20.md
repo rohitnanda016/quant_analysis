@@ -106,3 +106,19 @@ No raw price values were edited. The two factor-adjusted returns are calculated 
 4. Keep the separate 23 corporate-action/non-price-factor observations and dividend-completeness gate open. Keep the DYNAMATECH observation excluded/unresolved per user scope decision. Keep the locked evaluation period 2026-09-01 to 2027-08-31 out of model selection.
 
 This report resolves the reason for each old `NO_EXACT_ACTION` label, but it does not claim the overall price-quality or backtest readiness gate passes.
+
+
+## Independent source-price check log — 2026-10-20
+
+A follow-up source search was performed against contemporaneous reporting and the current NSE historical-data documentation. It did **not** yield the original dated NSE bhavcopy payload for all four observations, so none of the four saved prices is changed and all four remain blocked pending a raw source record.
+
+| Date | Symbol | Independent corroboration found | Outcome |
+|---|---|---|---|
+| 2018-05-17 | RCOM | Contemporaneous Times of India report states NSE close Rs 17.40, versus saved close Rs 16.40. [Source](https://timesofindia.indiatimes.com/business/india-business/why-reliance-communications-shares-spiked-71-today/articleshow/64207020.cms) | Mismatch corroborated by secondary reporting; raw NSE record and intended vendor series still required. |
+| 2019-06-20 | JETAIRWAYS | Contemporaneous reports state NSE close Rs 73.55 and BSE close Rs 54.00; the saved Rs 62.85 appears in a next-session previous-close report. [Financial Express](https://www.financialexpress.com/market/shares-of-jet-airways-rebound-after-steep-fall-rally-35-per-cent-1613328/) · [ET next-session liveblog](https://economictimes.indiatimes.com/sensex-nifty-live-today-2019-06-21/liveblog/69884480.cms?from=mdr) | Strong date/source-series mismatch signal; do not choose a replacement without the original source file. |
+| 2020-03-06 | YESBANK | Contemporaneous reporting states NSE close Rs 16.60, versus saved close Rs 16.15. [New Indian Express](https://www.newindianexpress.com/business/2020/mar/06/yes-bank-shares-plummet-56-per-cent-after-rbi-puts-lender-under-moratorium-2113111.html) | Mismatch corroborated by secondary reporting; raw NSE record and intended vendor series still required. |
+| 2020-03-17 | YESBANK | Contemporaneous reporting distinguishes BSE close Rs 58.65 from NSE close Rs 59.10; the saved value matches BSE. [Indian Express/PTI](https://indianexpress.com/article/business/market/yes-bank-continues-to-rally-for-third-day-shares-jump-nearly-35-per-cent-6318277/) | Likely exchange-series mismatch if the intended panel is NSE; confirm the panel's source and raw exchange record first. |
+
+NSE's public [historical/EOD data page](https://www.nseindia.com/static/market-data/eod-historical-data-subscription) describes the EOD bhavcopy product and directs historical-data requests to its market-data team; the [current All Reports page](https://www.nseindia.com/all-reports/) exposes report retrieval but did not provide a directly retrievable indexed raw file for these legacy dates in this check. Secondary articles establish discrepancy signals only; they are not a substitute for the exact exchange record or the project's source-vendor export.
+
+**Next evidence requirement:** obtain the dated NSE CM bhavcopy (or the exact original vendor export used to build the price panel) for each date, then record symbol, series, trade date, close, previous close, source filename/URL and SHA-256. Until then, keep the rows blocked and unchanged.
