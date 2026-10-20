@@ -44,7 +44,9 @@ def parse_factor(purpose):
     return factor, "+".join(dict.fromkeys(action_types))
 
 def classify_event(purpose, action_type):
-    p = str(purpose or "").upper()
+    p = str(purpose or "").upper().strip()
+    if not p:
+        return ""
     a = str(action_type or "").lower()
     if any(k in p for k in ("DEMERGER", "DE-MERGER", "SCHEME OF ARRANGEMENT", "AMALGAMATION", "HIVE-OFF", "SPIN OFF", "SPIN-OFF")):
         return "RESTRUCTURING"
