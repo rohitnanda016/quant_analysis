@@ -109,3 +109,8 @@ For each open event, record:
 ## Next action
 
 Resolve the Priority A rows against primary event notices first, then work through Priority B and the 28 ratio mismatches. Re-run the price-gap and corporate-action gates after evidence is recorded. Keep the authoritative backtest blocked until the data gate passes; keep total-return claims blocked until dividend completeness is demonstrated.
+
+
+## Follow-up — 2026-10-20
+
+The 28 `ACTION_RATIO_MISMATCH` rows in this historical Replay #38 snapshot have been reviewed. Their status was caused by comparing the ex-date price ratio directly with the parsed split/bonus share factor; that comparison incorrectly treats the ex-date market return as a factor error. The saved post-adjustment artifact shows all 28 returns after factor adjustment and none remains above 50% in absolute terms. No factor values or prices were changed. The reconciler fix and full 28-row disposition are documented in [ratio-mismatch resolution](ratio_mismatch_resolution_2026-10-20.md). Treat the counts above as the original snapshot, not the latest status. The separate 42 `NO_EXACT_ACTION` observations and 23 action-without-price-factor observations remain open for independent evidence review.
