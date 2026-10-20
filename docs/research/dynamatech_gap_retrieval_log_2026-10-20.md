@@ -54,3 +54,9 @@ A failed HTTP/web fetch is not evidence of no-trade. A monthly OHLC record is no
 ## Gate effect
 
 The price-gap readiness gate remains blocked. No data values or factor calculations were changed by this research note. The 2026-09-01 through 2027-08-31 evaluation window remains excluded from model selection.
+
+## Scope decision — 2026-10-20
+
+**User decision: stop spending research cycles on this gap for the current iteration.** Treat DYNAMATECH / 2014-05-08 as an explicitly waived, unresolved data exception—not as a recovered price, verified no-trade, or evidence that the exchange archive is absent. Do not make further retrieval attempts unless the user reopens this item.
+
+For research outputs in this iteration, exclude this symbol-date observation from any price-dependent calculation that requires an observed value; do not interpolate, carry forward, or synthesize a row. Keep the exception in the audit trail and report it as excluded/unresolved. This scope decision alone does not justify a global price-gap PASS or total-return claim; other data-quality and corporate-action gates still require their own evidence and validation. If the current readiness script continues to fail on this pair, record that gate as waived for this scoped run only rather than changing its status to resolved.
