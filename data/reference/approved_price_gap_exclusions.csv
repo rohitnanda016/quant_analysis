@@ -1,0 +1,2 @@
+date,symbol,status,reason,approval_reference
+2014-05-08,DYNAMATECH,excluded_unresolved,"User explicitly waived further retrieval for the current iteration; no price or no-trade status is inferred.","Issue #4 scope decision dated 2026-10-20"
