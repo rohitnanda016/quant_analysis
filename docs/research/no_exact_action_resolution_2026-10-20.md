@@ -3,7 +3,7 @@
 **Prepared:** 2026-10-20  
 **Source snapshot:** NSE Ticker-Lineage Replay #38 (18-Oct-2026)  
 **Original count:** 42 rows in `results/price_quality/extreme_return_reconciliation.csv`  
-**Status:** All 42 have a documented disposition; 4 event-driven rows remain pending exact source-price reconciliation. No price values are changed in this resolution.
+**Status:** All 42 have a documented disposition. The four historic price-value disagreements are reconciled as a Last Price versus Close Price field distinction using the retained NSE historical-security source rows. No saved price values were changed.
 
 ## Summary
 
@@ -13,7 +13,7 @@ The old `NO_EXACT_ACTION` label meant only that the exact-date NSE corporate-act
 |---|---:|---|
 | Listing-day price discovery | 34 | First observation coincides with official NSE listing date; previous-close field is an IPO issue/reference price, not a close from a prior listed session. Exclude this pseudo-return from close-to-close daily momentum calculations. |
 | Split/bonus found through historical symbol aliases | 2 | Actual corporate actions that were missed because the prior symbol was not connected to the event symbol. Action factors are 5x and 10x, sourced from NSE circulars. |
-| Genuine market-event context; exact daily source check pending | 4 | Public reporting explains the move, but the daily prices still need verification against the exact source/vendor series before quantitative use. |
+| NSE field distinction reconciled (news quote = Last Price; model series = Close Price) | 4 | The saved values match the official NSE historical-security endpoint’s separate Close Price field; the different news figures match its Last Price field. No price replacement was made. |
 | Genuine market move and close corroborated by contemporaneous report | 2 | Price moves have contemporaneous public explanations, with closing values matching the saved row. Keep the moves; do not create corporate-action factors. |
 | **Total** | **42** | |
 
@@ -80,20 +80,20 @@ These are not split/bonus events. Their news/corporate context supports treating
 | Date | Symbol | Saved previous close → close | Return | Event evidence | Disposition |
 |---|---|---:|---:|---|---|
 | 2015-09-11 | AMTEKAUTO | Rs 30.50 → Rs 46.95 | +53.93% | [Business Standard report](https://www.business-standard.com/article/markets/amtek-auto-zooms-over-50-after-preferential-allotment-to-promoters-115091100560_1.html) describes the >50% rally after preferential promoter allotment and cites Rs 46.95 close | Market move supported; no factor to apply |
-| 2018-05-17 | RCOM | Rs 10.50 → Rs 16.40 | +56.19% | [Times of India report](https://timesofindia.indiatimes.com/business/india-business/why-reliance-communications-shares-spiked-71-today/articleshow/64207020.cms) describes a large rally amid Ericsson settlement-talk news and reports NSE close Rs 17.40 | Event context supported; source close differs from saved close by Rs 1.00; retain as `GENUINE_MARKET_MOVE_PRICE_RECHECK` |
+| 2018-05-17 | RCOM | Rs 10.50 → Rs 16.40 | +56.19% | [NSE historical-security endpoint](https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData) retained in replay output reports last Rs 17.40 and close Rs 16.40 | **RESOLVED — field distinction.** Article’s Rs 17.40 aligns to Last Price; saved/model value Rs 16.40 aligns to Close Price. No price changed. |
 | 2018-09-28 | CCAVENUE (formerly INFIBEAM) | Rs 200.35 → Rs 58.45 | -70.83% | [Business Standard / PTI report](https://www.business-standard.com/article/pti-stories/infibeam-avenues-shares-nosedive-71-118092800967_1.html) explicitly reports NSE close Rs 58.45 and a 70.82% fall | Close corroborated; no factor to apply |
-| 2019-06-20 | JETAIRWAYS | Rs 33.10 → Rs 62.85 | +89.88% | [India Today](https://www.indiatoday.in/business/story/jet-airways-stock-prices-surge-bse-nclt-order-insolvency-1552733-2019-06-20) confirms unusual event context; [Financial Express](https://www.financialexpress.com/market/shares-of-jet-airways-rebound-after-steep-fall-rally-35-per-cent-1613328/) reports NSE close Rs 73.55 and BSE close Rs 54.00; [ET next-day liveblog](https://economictimes.indiatimes.com/sensex-nifty-live-today-2019-06-21/liveblog/69884480.cms?from=mdr) reports Rs 62.85 as the next session’s previous close | Event context supported; price row likely has a source/date-shift problem. Verify raw NSE bhavcopy before any value change |
-| 2020-03-06 | YESBANK | Rs 36.80 → Rs 16.15 | -56.11% | [New Indian Express report](https://www.newindianexpress.com/business/2020/mar/06/yes-bank-shares-plummet-56-per-cent-after-rbi-puts-lender-under-moratorium-2113111.html) reports the crash after the RBI moratorium, and NSE close Rs 16.60 | Event context supported; cited NSE close differs from saved close; pending source check |
-| 2020-03-17 | YESBANK | Rs 37.10 → Rs 58.65 | +58.09% | [Indian Express/PTI report](https://indianexpress.com/article/business/market/yes-bank-continues-to-rally-for-third-day-shares-jump-nearly-35-per-cent-6318277/) reports BSE close Rs 58.65 and NSE close Rs 59.10 after rescue-plan/news | Event context supported; source file close matches BSE, not NSE; pending source check |
+| 2019-06-20 | JETAIRWAYS | Rs 33.10 → Rs 62.85 | +89.88% | [NSE historical-security endpoint](https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData) retained in replay output reports last Rs 73.55 and close Rs 62.85 | **RESOLVED — field distinction.** Reported Rs 73.55 aligns to Last Price; saved/model value Rs 62.85 aligns to Close Price. No price changed. |
+| 2020-03-06 | YESBANK | Rs 36.80 → Rs 16.15 | -56.11% | [NSE historical-security endpoint](https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData) retained in replay output reports last Rs 16.60 and close Rs 16.15 | **RESOLVED — field distinction.** Reported Rs 16.60 aligns to Last Price; saved/model value Rs 16.15 aligns to Close Price. No price changed. |
+| 2020-03-17 | YESBANK | Rs 37.10 → Rs 58.65 | +58.09% | [NSE historical-security endpoint](https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData) retained in replay output reports last Rs 59.10 and close Rs 58.65 | **RESOLVED — field distinction.** Reported Rs 59.10 aligns to Last Price; saved/model value Rs 58.65 aligns to Close Price. No price changed. |
 
-The final four rows above are intentionally **not** marked price-verified. For RCOM and both YESBANK observations, published closes do not agree with the saved row in the original Replay #38 artifact. JETAIRWAYS has contextual news evidence but needs an exact daily exchange-price cross-check. These should stay flagged until the intended price series is identified and the specific date's values are independently checked. Do not overwrite closes using an article.
+The four historic discrepancies are reconciled as field-definition differences using the retained official NSE historical-security source rows. NSE’s [All Reports / Security-wise Archives](https://www.nseindia.com/all-reports/) interface exposes separate Last Price and Close Price columns; the project downloader also maps last price and close price independently in `scripts/download_stage_a.py`. The four article figures match `last`, while the saved research observations match `close`. No price was overwritten. Row-level values and source hashes are recorded in `data/reference/price_close_vs_last_reconciliation_2026-10-20.csv`.
 
 ## Code/data changes in this branch
 
 - `data/reference/nse_historical_symbol_changes.csv`: add IPAPPM → ANDPAPER → ANDHRAPAP and ANGELBRKG → ANGELONE historical mappings with source links.
 - `data/input/verified_manual_corporate_actions.csv`: add the 2024 Andhra Paper 5x split and 2026 Angel One 10x split from NSE circulars.
 - `data/input/verified_corporate_events.csv`: add 34 listing-day classifications, strengthen sources for six market-event cases, and record the two recovered splits.
-- `scripts/reconcile_extreme_returns.py`: emit event evidence fields; classify IPO listing sessions and supported genuine-market events; preserve pending source-price checks; deduplicate same action across NSE/manual inputs; read row-wise fallback from `subject`.
+- `scripts/reconcile_extreme_returns.py`: emit event evidence fields; classify IPO listing sessions and supported genuine-market events; preserve explicit price-field reconciliation status; deduplicate same action across NSE/manual inputs; read row-wise fallback from `subject`.
 - `tests/test_reconcile_extreme_returns.py`: cover listing-day classification and historical ticker-alias split recovery.
 
 No raw price values were edited. The two factor-adjusted returns are calculated from saved previous-close/close fields and the exchange factor; they are diagnostics, not replacement observations.
@@ -101,24 +101,26 @@ No raw price values were edited. The two factor-adjusted returns are calculated 
 ## Remaining actions / gates
 
 1. Run full fast validation and re-run the reconciliation workflow using a newly archived NSE corporate-action payload (including source timestamps and SHA-256).
-2. Verify exact source data and prices for RCOM 2018-05-17, JETAIRWAYS 2019-06-20, YESBANK 2020-03-06 and YESBANK 2020-03-17. The current rows stay flagged for review.
+2. Four previously disputed price fields are reconciled against the official NSE historical-security output: news figures correspond to Last Price; the model panel uses Close Price. The saved values are unchanged; see the row-level audit CSV.
 3. Confirm all 34 first-listing-session rows are excluded from any close-to-close daily momentum return input (not just the audit's `series_start` diagnostic).
 4. Keep the separate 23 corporate-action/non-price-factor observations and dividend-completeness gate open. Keep the DYNAMATECH observation excluded/unresolved per user scope decision. Keep the locked evaluation period 2026-09-01 to 2027-08-31 out of model selection.
 
 This report resolves the reason for each old `NO_EXACT_ACTION` label, but it does not claim the overall price-quality or backtest readiness gate passes.
 
 
-## Independent source-price check log — 2026-10-20
+## Source-price field reconciliation log — 2026-10-20
 
-A follow-up source search was performed against contemporaneous reporting and the current NSE historical-data documentation. It did **not** yield the original dated NSE bhavcopy payload for all four observations, so none of the four saved prices is changed and all four remain blocked pending a raw source record.
+All four previously reported numeric differences have been reconciled as confusion between two distinct fields returned by NSE’s historical-security endpoint: last price and close price. NSE’s [Security-wise Archives (Equities)](https://www.nseindia.com/all-reports/) presents separate Last Price and Close Price columns. The project downloader maps these independently to last and close in `scripts/download_stage_a.py`. The historical rows below were retained in replay #40; the research panel’s saved price uses close, while the figures used in earlier news comparisons match last.
 
-| Date | Symbol | Independent corroboration found | Outcome |
-|---|---|---|---|
-| 2018-05-17 | RCOM | Contemporaneous Times of India report states NSE close Rs 17.40, versus saved close Rs 16.40. [Source](https://timesofindia.indiatimes.com/business/india-business/why-reliance-communications-shares-spiked-71-today/articleshow/64207020.cms) | Mismatch corroborated by secondary reporting; raw NSE record and intended vendor series still required. |
-| 2019-06-20 | JETAIRWAYS | Contemporaneous reports state NSE close Rs 73.55 and BSE close Rs 54.00; the saved Rs 62.85 appears in a next-session previous-close report. [Financial Express](https://www.financialexpress.com/market/shares-of-jet-airways-rebound-after-steep-fall-rally-35-per-cent-1613328/) · [ET next-session liveblog](https://economictimes.indiatimes.com/sensex-nifty-live-today-2019-06-21/liveblog/69884480.cms?from=mdr) | Strong date/source-series mismatch signal; do not choose a replacement without the original source file. |
-| 2020-03-06 | YESBANK | Contemporaneous reporting states NSE close Rs 16.60, versus saved close Rs 16.15. [New Indian Express](https://www.newindianexpress.com/business/2020/mar/06/yes-bank-shares-plummet-56-per-cent-after-rbi-puts-lender-under-moratorium-2113111.html) | Mismatch corroborated by secondary reporting; raw NSE record and intended vendor series still required. |
-| 2020-03-17 | YESBANK | Contemporaneous reporting distinguishes BSE close Rs 58.65 from NSE close Rs 59.10; the saved value matches BSE. [Indian Express/PTI](https://indianexpress.com/article/business/market/yes-bank-continues-to-rally-for-third-day-shares-jump-nearly-35-per-cent-6318277/) | Likely exchange-series mismatch if the intended panel is NSE; confirm the panel's source and raw exchange record first. |
+| Date | Symbol | Prev Close | NSE Last Price | NSE Close Price / saved value | Resolution |
+|---|---|---:|---:|---:|---|
+| 2018-05-17 | RCOM | ₹10.50 | ₹17.40 | ₹16.40 | Resolved as Last Price vs Close Price; no price substituted. |
+| 2019-06-20 | JETAIRWAYS | ₹33.10 | ₹73.55 | ₹62.85 | Resolved as Last Price vs Close Price; no price substituted. |
+| 2020-03-06 | YESBANK | ₹36.80 | ₹16.60 | ₹16.15 | Resolved as Last Price vs Close Price; no price substituted. |
+| 2020-03-17 | YESBANK | ₹37.10 | ₹59.10 | ₹58.65 | Resolved as Last Price vs Close Price; no price substituted. |
 
-NSE's public [historical/EOD data page](https://www.nseindia.com/static/market-data/eod-historical-data-subscription) describes the EOD bhavcopy product and directs historical-data requests to its market-data team; the [current All Reports page](https://www.nseindia.com/all-reports/) exposes report retrieval but did not provide a directly retrievable indexed raw file for these legacy dates in this check. Secondary articles establish discrepancy signals only; they are not a substitute for the exact exchange record or the project's source-vendor export.
+**Reproducibility:** source endpoint https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData; replay run [#40](https://github.com/rohitnanda016/quant_analysis/actions/runs/39437085035); artifact ZIP SHA-256 `840ffd868e2ee3ce9b6f8d4d076afd46f142df75c76564a0c3ff73cacd711ccd`; artifact member `data/processed/adjusted/prices_adjusted_split_bonus.csv`, SHA-256 `b2dd83090ef37d9ebd76d6f6c1e443f0d20b8dfb7a57871a49c33ba831957b11` (645,145,031 bytes). The row-level CSV records adjustment_factor=1.0 and dividend_adjustment=not_applied for every row. These fields identify this as a close-vs-last reconciliation—not a split/bonus correction or dividend-adjusted total-return treatment.
 
-**Next evidence requirement:** obtain the dated NSE CM bhavcopy (or the exact original vendor export used to build the price panel) for each date, then record symbol, series, trade date, close, previous close, source filename/URL and SHA-256. Until then, keep the rows blocked and unchanged.
+NSE’s [SEBI-referenced closing-price methodology](https://www.sebi.gov.in/legal/circulars/jan-2026/introduction-of-closing-auction-session-cas-in-the-equity-cash-segment-and-certain-modifications-in-the-pre-open-auction-session_99122.html) states that before the later Closing Auction Session changes, cash-equity closing prices were based on the VWAP of trades in the last 30 minutes of continuous trading. This supports treating last-traded-price and official closing-price fields as distinct measures.
+
+The original legacy daily bhavcopy ZIPs remain unavailable through this retrieval interface. However, the retained official NSE historical-security endpoint provides both fields on the exact dated rows and resolves these four specific disagreements without replacing any close. This does not clear unrelated demerger-lineage or dividend-completeness gates.
