@@ -1,6 +1,6 @@
 # NSE data request — DYNAMATECH, 2014-05-08
 
-**Purpose:** Resolve the single outstanding historical price-observation gap using exchange-supplied evidence. This request has not been sent.
+**Status:** DORMANT TEMPLATE ONLY — not to be sent in the current iteration. The user explicitly waived further DYNAMATECH 2014-05-08 retrieval on 2026-10-20. The row remains EXCLUDED / UNRESOLVED, not a recovered price or verified no-trade. Retain this text only in case the user later reopens the gap. This request has not been sent.
 
 ## Suggested email
 
