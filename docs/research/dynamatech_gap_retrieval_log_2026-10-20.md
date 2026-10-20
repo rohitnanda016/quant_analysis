@@ -2,7 +2,8 @@
 
 **Last checked:** 2026-10-20  
 **Target:** NSE symbol DYNAMATECH, 2014-05-08  
-**Disposition:** OPEN — no accepted price and no verified-no-trade classification.
+**Historical retrieval finding:** no accepted price and no verified-no-trade classification were obtained from these attempts.  
+**Current disposition:** EXCLUDED / UNRESOLVED by explicit user scope decision dated 2026-10-20. Do not continue retrieval this iteration; do not impute or carry forward a price. Reopen only if the user asks.
 
 ## Retrieval attempts and findings
 
