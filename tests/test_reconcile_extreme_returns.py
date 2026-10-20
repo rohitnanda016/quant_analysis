@@ -51,7 +51,7 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
             self.assertAlmostEqual(float(result["inferred_factor"]), 2.0)
             self.assertGreater(float(result["factor_error"]), 0.08)
             self.assertAlmostEqual(float(result["factor_adjusted_return"]), -0.10, places=6)
-            self.assertEqual(result["nearby_action_date"], "")
+            self.assertTrue(pd.isna(result["nearby_action_date"]))
 
 
     def test_nearby_action_is_reported_without_becoming_exact_match(self):
