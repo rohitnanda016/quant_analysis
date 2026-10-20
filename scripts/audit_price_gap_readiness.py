@@ -13,9 +13,15 @@ import pandas as pd
 try:
     from scripts.membership_scope import build_membership_session_windows, in_membership_research_window
     from scripts.symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+    from scripts.approved_price_gap_exclusions import (
+        load_scope_exclusions, match_scope_exclusions_to_archive_absences,
+    )
 except ModuleNotFoundError:
     from membership_scope import build_membership_session_windows, in_membership_research_window
     from symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+    from approved_price_gap_exclusions import (
+        load_scope_exclusions, match_scope_exclusions_to_archive_absences,
+    )
 
 PRICE_CONTINUITY_SERIES = {"EQ", "BE", "BZ"}
 
@@ -48,6 +54,16 @@ def main():
     ap.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
     ap.add_argument("--membership", default="data/input/nifty500_membership.csv")
     ap.add_argument("--membership-warmup-sessions", type=int, default=252)
+    ap.add_argument(
+        "--scope-exclusions",
+        default="data/reference/approved_price_gap_exclusions.csv",
+        help="Explicit excluded/unresolved scope decisions; never price/no-trade evidence",
+    )
+    ap.add_argument(
+        "--archive-absence-report",
+        default="results/price_quality/bhavcopy_repair_absences.csv",
+        help="Replay artifact used to validate each scoped exclusion against an exact unresolved absence",
+    )
     args = ap.parse_args()
 
     p = pd.read_csv(args.prices, usecols=lambda c: c in {
@@ -105,6 +121,25 @@ def main():
             nt = nt.loc[~invalid_evidence].copy()
     no_trade = set(zip(nt["date"], nt["symbol"]))
 
+    # A scope waiver can suppress only the exact unresolved absence already
+    # present in the replay artifact. It never creates price/no-trade evidence.
+    scope_exclusion_rows = []
+    scope_matched_pairs = set()
+    scope_unmatched_rows = []
+    scope_exclusion_issues = []
+    try:
+        scope_exclusion_rows = load_scope_exclusions(args.scope_exclusions)
+        matched, unmatched, issues = match_scope_exclusions_to_archive_absences(
+            scope_exclusion_rows, args.archive_absence_report
+        )
+        scope_unmatched_rows = unmatched
+        scope_exclusion_issues.extend(issues)
+        # Fail closed for the whole ledger if any row is stale or unverifiable.
+        if not scope_exclusion_issues and not scope_unmatched_rows:
+            scope_matched_pairs = matched
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        scope_exclusion_issues.append(str(exc))
+
     rename_rows = load_symbol_rename_rows(args.symbol_map, args.symbol_map_supplement)
     aliases = terminal_symbol_aliases(rename_rows)
     def terminal_alias(value):
@@ -153,7 +188,12 @@ def main():
             for i in relevant_indices:
                 dd = pd.Timestamp(calendar[i])
                 resolved_alias = (dd, terminal_alias(symbol)) in observed_canonical_pairs
-                if (dd, str(symbol)) not in no_trade and not resolved_alias:
+                pair = (dd.normalize(), str(symbol).strip().upper())
+                if (
+                    pair not in no_trade
+                    and pair not in scope_matched_pairs
+                    and not resolved_alias
+                ):
                     missing_unverified.append({
                         "date": dd.date().isoformat(),
                         "symbol": str(symbol),
@@ -210,6 +250,7 @@ def main():
         if invalid_quality:
             gap_blockers.append(f"Basic raw price-quality checks failed: {invalid_quality}.")
     gap_blockers.extend(ledger_evidence_issues)
+    gap_blockers.extend(scope_exclusion_issues)
     if fetch_errors != 0:
         gap_blockers.append(f"{fetch_errors} daily bhavcopy date(s) failed; failed downloads are not no-trade evidence.")
     if min_bhavcopy_rows < 500:
@@ -220,8 +261,20 @@ def main():
         gap_blockers.append(f"Repair accounting mismatch: target_pairs={target_pairs}, accounted={accounted}.")
     if unresolved_fetch_pairs > 0:
         gap_blockers.append(f"{unresolved_fetch_pairs} candidate symbol/date pair(s) remain unresolved due to fetch errors.")
-    if archive_absence_pairs > 0:
-        gap_blockers.append(f"{archive_absence_pairs} symbol/date pairs lack an EQ/BE/BZ price observation and independent evidence of listing/suspension status; review them before any carry-forward.")
+    blocking_archive_absence_pairs = max(
+        0, archive_absence_pairs - len(scope_matched_pairs)
+    )
+    if len(scope_matched_pairs) > archive_absence_pairs:
+        gap_blockers.append(
+            "Scoped exclusions matched more rows than the repair report's unresolved-absence count; refusing scope waiver."
+        )
+        blocking_archive_absence_pairs = archive_absence_pairs
+    if blocking_archive_absence_pairs > 0:
+        gap_blockers.append(
+            f"{blocking_archive_absence_pairs} symbol/date pair(s) lack an EQ/BE/BZ price observation "
+            "and independent evidence of listing/suspension status after approved scope exclusions; "
+            "review them before any carry-forward."
+        )
     if missing_unverified:
         gap_blockers.append(f"{len(missing_unverified)} missing pair(s) in long internal gaps are neither observed nor verified no-trade.")
 
@@ -273,12 +326,30 @@ def main():
             "rows_added": repair.get("rows_added"),
             "verified_no_trade_pairs": repair.get("verified_no_trade_pairs"),
             "archive_absence_review_pairs": archive_absence_pairs,
+            "scope_excluded_archive_absence_pairs": len(scope_matched_pairs),
+            "blocking_archive_absence_pairs": blocking_archive_absence_pairs,
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
             "accounted_target_pairs": accounted,
             "accounting_buckets": accounting["buckets"],
             "accounting_mismatch": accounting["mismatch"],
         },
         "approved_no_trade_ledger_evidence_issues": ledger_evidence_issues,
+        "scope_exclusions": {
+            "ledger_path": str(args.scope_exclusions),
+            "archive_absence_report_path": str(args.archive_absence_report),
+            "declared_count": len(scope_exclusion_rows),
+            "matched_archive_absence_pairs": [
+                {"date": pair[0].date().isoformat(), "symbol": pair[1]}
+                for pair in sorted(scope_matched_pairs)
+            ],
+            "unmatched": [
+                {"date": row.get("date"), "symbol": row.get("symbol"),
+                 "status": row.get("status")}
+                for row in scope_unmatched_rows
+            ],
+            "issues": scope_exclusion_issues,
+            "policy": "excluded_unresolved is a scope disposition, not a price, not verified_no_trade, and never eligible for carry-forward",
+        },
         "remaining_long_internal_gap_spans": int(len(long_gap_spans)),
         "remaining_unverified_gap_pairs": int(len(missing_unverified)),
         "sample_unverified_gap_pairs": missing_unverified[:100],
@@ -289,6 +360,7 @@ def main():
             "PROVISIONAL price-return research is not production approval.",
             "Dividend adjustment has not been established as complete; do not describe these results as total-return performance.",
             "Any remaining large continuity events require event-level corporate-action reconciliation before interpreting strategy returns.",
+            "Explicit scope exclusions remain unresolved and must be disclosed; they are not verified no-trade and are not prices.",
             "The locked evaluation window must remain excluded from model selection and tuning."
         ],
     }
