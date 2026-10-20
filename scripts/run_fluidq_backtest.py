@@ -103,6 +103,7 @@ def mask_unresolved_corporate_event_windows(frame, events):
     if event_rows.empty:
         return out, counts
 
+    out["corporate_event_dma_masked"] = False
     event_rows["symbol"] = canonicalize_symbol(event_rows["symbol"])
     event_rows["event_date"] = pd.to_datetime(
         event_rows["event_date"], errors="coerce", format="mixed"
@@ -146,6 +147,8 @@ def mask_unresolved_corporate_event_windows(frame, events):
             existing = out.loc[indices, column].notna()
             counts[f"{column}_rows_masked"] += int((mask & existing).sum())
             out.loc[indices, column] = out.loc[indices, column].mask(mask)
+            if column == "dma200":
+                out.loc[indices, "corporate_event_dma_masked"] = mask.to_numpy(dtype=bool)
 
     return out, counts
 
@@ -371,7 +374,14 @@ def main():
         nifty_dma=float(market_snap["nifty500_dma200"].iloc[0]) if market_snap["nifty500_dma200"].notna().any() else np.nan
         # Market breadth includes valid price marks across EQ/BE/BZ. Portfolio
         # selection below uses only EQ-series rows.
-        breadth_rows=market_snap.loc[market_snap["dma200"].notna()]
+        # Keep the prior breadth convention for ordinary missing history, but
+        # exclude rows deliberately masked because a known demerger/scheme still
+        # contaminates the 200-session DMA. Otherwise the unresolved price jump
+        # could change the market regime as well as the individual stock rank.
+        if "corporate_event_dma_masked" in market_snap.columns:
+            breadth_rows=market_snap.loc[~market_snap["corporate_event_dma_masked"].fillna(False)]
+        else:
+            breadth_rows=market_snap
         breadth=float((breadth_rows["close"]>breadth_rows["dma200"]).mean()) if not breadth_rows.empty else np.nan
         snap=eq_tradable_rows(market_snap)
         snap["rs6"]=snap["ret_6m"]-nifty6
