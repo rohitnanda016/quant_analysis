@@ -69,10 +69,15 @@ def aliases(path, supplement):
     return terminal_symbol_aliases(load_symbol_rename_rows(base, supplement))
 
 def first_existing_series(df, names):
+    """Choose the first non-empty field on each row, not the first existing column."""
+    result = pd.Series("", index=df.index, dtype="object")
     for name in names:
-        if name in df.columns:
-            return df[name].fillna("").astype(str)
-    return pd.Series("", index=df.index, dtype="object")
+        if name not in df.columns:
+            continue
+        candidate = df[name].fillna("").astype(str).str.strip()
+        candidate = candidate.mask(candidate.str.lower().isin(["", "nan", "none", "<na>"]), "")
+        result = result.where(result.ne(""), candidate)
+    return result
 
 p = argparse.ArgumentParser()
 p.add_argument("--extremes", required=True)
