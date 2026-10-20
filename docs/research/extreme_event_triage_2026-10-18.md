@@ -108,7 +108,7 @@ For each open event, record:
 
 ## Next action
 
-Resolve the Priority A rows against primary event notices first, then work through Priority B and the 28 ratio mismatches. Re-run the price-gap and corporate-action gates after evidence is recorded. Keep the authoritative backtest blocked until the data gate passes; keep total-return claims blocked until dividend completeness is demonstrated.
+Resolve the Priority A restructuring rows against primary event notices first, then work through the 42 Priority B no-exact-action observations. The original 28 ratio-mismatch flags have been reclassified as parsed action factors with residual ex-date returns; see [the resolution report](ratio_mismatch_resolution_2026-10-20.md). Re-run the price-gap and corporate-action gates after evidence is recorded. Keep the authoritative backtest blocked until the data gate passes; keep total-return claims blocked until dividend completeness is demonstrated.
 
 
 ## Follow-up — 2026-10-20
