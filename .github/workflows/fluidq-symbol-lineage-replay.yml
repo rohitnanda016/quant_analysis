@@ -182,7 +182,12 @@ jobs:
       - name: Fetch NSE corporate actions
         id: fetch_actions
         continue-on-error: true
-        run: python scripts/fetch_nse_corporate_actions.py --start 2014-01-01 --end 2026-08-31 --out data/input/nse_corporate_actions_2014_2026.csv
+        run: |
+          python scripts/fetch_nse_corporate_actions.py \
+            --start 2014-01-01 \
+            --end 2026-08-31 \
+            --out data/input/nse_corporate_actions_2014_2026.csv \
+            --raw-archive-dir results/price_quality/nse_corporate_actions_raw
 
       - name: Reconcile extreme returns against actions
         id: reconcile_actions
