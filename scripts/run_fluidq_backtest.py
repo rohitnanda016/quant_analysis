@@ -79,6 +79,80 @@ def canonicalize_symbol(series):
     return series.astype(str).str.upper().str.strip().replace(SYMBOL_ALIASES)
 
 
+def mask_unresolved_corporate_event_windows(frame, events):
+    """Mask price-derived features while known scheme discontinuities contaminate them.
+
+    This conservative interim policy prevents mechanical parent-price discontinuities
+    entering momentum, trend or volatility ranks until a validated shareholder-wealth-
+    continuous lineage series is actually applied. It never imputes or adjusts prices.
+    """
+    out = frame.copy()
+    feature_columns = ("ret_6m", "ret_12m_ex1m", "dma200", "trend", "vol126")
+    counts = {f"{name}_rows_masked": 0 for name in feature_columns}
+
+    required = {"symbol", "event_date", "treatment"}
+    if not required.issubset(events.columns):
+        raise ValueError(
+            "Corporate-event blackout requires event columns "
+            "'symbol', 'event_date' and 'treatment'."
+        )
+
+    event_rows = events.loc[
+        events["treatment"].astype(str).str.strip().str.lower().eq("corporate_event")
+    ].copy()
+    if event_rows.empty:
+        return out, counts
+
+    out["corporate_event_dma_masked"] = False
+    event_rows["symbol"] = canonicalize_symbol(event_rows["symbol"])
+    event_rows["event_date"] = pd.to_datetime(
+        event_rows["event_date"], errors="coerce", format="mixed"
+    ).dt.normalize()
+    event_rows = event_rows.dropna(subset=["event_date", "symbol"])
+    event_dates_by_symbol = {
+        str(symbol): set(group["event_date"].tolist())
+        for symbol, group in event_rows.groupby("symbol", sort=False)
+    }
+
+    for symbol, indices in out.groupby("symbol", sort=False).groups.items():
+        relevant_events = event_dates_by_symbol.get(str(symbol), set())
+        if not relevant_events:
+            continue
+        indices = list(indices)
+        session_dates = pd.to_datetime(
+            out.loc[indices, "date"], errors="coerce", format="mixed"
+        ).dt.normalize()
+        event_flag = pd.Series(
+            session_dates.isin(relevant_events).astype("int8").to_numpy(),
+            index=indices,
+            dtype="int8",
+        )
+
+        # Returns include the end close and exclude the starting close.
+        masks = {
+            "ret_6m": event_flag.rolling(126, min_periods=1).max().fillna(0).astype(bool),
+            # ret_12m_ex1m compares closes at i-252 and i-21. Event dates
+            # i-251 ... i-21 are inside that measured return interval.
+            "ret_12m_ex1m": (
+                event_flag.shift(21).rolling(231, min_periods=1).max()
+                .fillna(0).astype(bool)
+            ),
+            "dma200": event_flag.rolling(200, min_periods=1).max().fillna(0).astype(bool),
+            "trend": event_flag.rolling(200, min_periods=1).max().fillna(0).astype(bool),
+            "vol126": event_flag.rolling(126, min_periods=1).max().fillna(0).astype(bool),
+        }
+        for column, mask in masks.items():
+            if column not in out.columns:
+                continue
+            existing = out.loc[indices, column].notna()
+            counts[f"{column}_rows_masked"] += int((mask & existing).sum())
+            out.loc[indices, column] = out.loc[indices, column].mask(mask)
+            if column == "dma200":
+                out.loc[indices, "corporate_event_dma_masked"] = mask.to_numpy(dtype=bool)
+
+    return out, counts
+
+
 def find_col(df, candidates):
     low={c.lower().strip():c for c in df.columns}
     for x in candidates:
@@ -238,12 +312,24 @@ def main():
         )
     df=df.reset_index(drop=True)
 
+    events=pd.read_csv(a.events,low_memory=False)
+    required_event_columns={"symbol","event_date","treatment"}
+    if not required_event_columns.issubset(events.columns):
+        raise ValueError(
+            f"Corporate-event input must contain {sorted(required_event_columns)}; "
+            f"found {list(events.columns)}"
+        )
+    events["symbol"]=canonicalize_symbol(events["symbol"])
+    events["event_date"]=pd.to_datetime(events["event_date"],errors="coerce",format="mixed").dt.normalize()
+    events["treatment"]=events["treatment"].astype(str).str.strip()
+
     g=df.groupby("symbol",sort=False)
     df["ret_6m"]=g["close"].pct_change(126)
     df["ret_12m_ex1m"]=g["close"].shift(21).div(g["close"].shift(252))-1
     df["dma200"]=g["close"].transform(lambda s:s.rolling(200,min_periods=200).mean())
     df["trend"]=df["close"]/df["dma200"]-1
     df["vol126"]=g["close"].transform(lambda s:s.pct_change().rolling(126,min_periods=100).std())*np.sqrt(252)
+    df, corporate_event_mask_counts = mask_unresolved_corporate_event_windows(df, events)
     df["ram"]=df["ret_6m"]/df["vol126"].replace(0,np.nan)
     df["adv60"]=g["turnover"].transform(lambda s:s.rolling(60,min_periods=40).mean()) if "turnover" in df else np.nan
 
@@ -263,7 +349,6 @@ def main():
         sector_members["sector"]=sector_members["sector"].astype(str).str.strip()
         sector_members["valid_from"]=pd.to_datetime(sector_members["valid_from"],errors="coerce")
         sector_members["valid_to"]=pd.to_datetime(sector_members["valid_to"],errors="coerce")
-    events=pd.read_csv(a.events); events["event_date"]=pd.to_datetime(events["event_date"],errors="coerce")
     corporate=set(events.loc[events.treatment=="corporate_event","symbol"].astype(str).str.upper())
     period_key=df["date"].dt.to_period("M") if a.rebalance_frequency=="monthly" else df["date"].dt.to_period("Q")
     reb_dates=df.groupby(period_key)["date"].max().tolist(); snapshots=[]; holdings=set(); price_dates=np.sort(df["date"].unique())
@@ -289,7 +374,15 @@ def main():
         nifty_dma=float(market_snap["nifty500_dma200"].iloc[0]) if market_snap["nifty500_dma200"].notna().any() else np.nan
         # Market breadth includes valid price marks across EQ/BE/BZ. Portfolio
         # selection below uses only EQ-series rows.
-        breadth=float((market_snap["close"]>market_snap["dma200"]).mean())
+        # Keep the prior breadth convention for ordinary missing history, but
+        # exclude rows deliberately masked because a known demerger/scheme still
+        # contaminates the 200-session DMA. Otherwise the unresolved price jump
+        # could change the market regime as well as the individual stock rank.
+        if "corporate_event_dma_masked" in market_snap.columns:
+            breadth_rows=market_snap.loc[~market_snap["corporate_event_dma_masked"].fillna(False)]
+        else:
+            breadth_rows=market_snap
+        breadth=float((breadth_rows["close"]>breadth_rows["dma200"]).mean()) if not breadth_rows.empty else np.nan
         snap=eq_tradable_rows(market_snap)
         snap["rs6"]=snap["ret_6m"]-nifty6
         if sector_members is not None:
@@ -478,7 +571,7 @@ def main():
     dr=pd.DataFrame(daily,columns=["date","ret","signal_date"]).sort_values("date")
     if dr.empty: raise ValueError("No daily portfolio series produced")
     dr["nav"]=(1+dr["ret"]).cumprod(); years=(dr.date.iloc[-1]-dr.date.iloc[0]).days/365.25; cagr=float(dr.nav.iloc[-1]**(1/years)-1) if years>0 else np.nan; peak=dr.nav.cummax(); dd=dr.nav/peak-1
-    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "return_basis":"split_bonus_adjusted_price_returns_ex_dividends; exploratory price-return series, not total return", "total_return_ready":False, "price_gap_policy":"Forward-fill up to 10 unverified missing sessions; extend mark-to-last-close only on dates marked verified_no_trade by a successfully parsed official NSE EQ bhavcopy. Actual EQ/BE/BZ closes are used for price and held-return continuity; only EQ rows are eligible for new holdings. Raw prices are never fabricated; unverified longer gaps remain missing and fail if held.", "price_series_policy":"EQ/BE/BZ close history for returns; EQ only for new holdings. Trade-to-trade execution frictions are approximated by the existing close-fill/cost model and are not a fill simulation.", "membership_schema":"dated effective intervals (valid_from/valid_to) or explicit dated review snapshots are applied; undated membership inputs are rejected.", "verified_no_trade_ledger":str(no_trade_path) if no_trade_path.exists() else None, "verified_no_trade_pairs":verified_no_trade_pairs, "verified_no_trade_cells_filled":verified_no_trade_cells_filled, "missing_price_cells_before_fill":missing_price_cells_before_fill, "short_stale_price_cells_filled":short_stale_cells_filled, "stale_price_cells_filled":stale_price_cells_filled, "remaining_unverified_missing_cells":remaining_unverified_missing, "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
+    metrics={"start":str(dr.date.iloc[0].date()),"end":str(dr.date.iloc[-1].date()),"cagr":cagr,"max_drawdown":float(dd.min()),"final_nav":float(dr.nav.iloc[-1]),"rebalance_count":int(len(sig)),"avg_turnover":float(sig.turnover.mean()),"top_n":a.top_n,"transaction_cost":a.transaction_cost,"rebalance_frequency":a.rebalance_frequency,"execution_lag_days":a.execution_lag_days,"nifty500_index_source":"cached_file" if a.nifty500_index else "nse_archive","factor_weights":{"ret_6m":float(w6m),"ret_12m_ex1m":float(w12),"rs6":float(wr6),"trend":float(wtrend),"ram":float(wram)},"relative_strength_source":"NSE daily multi-index archive, Nifty 500 price index","relative_strength_definition":"stock 6M return minus Nifty 500 6M price return","regime_definition":"Nifty 500 breadth >=60%, Nifty 500 6M return >0, and Nifty 500 above 200-DMA","sector_constrained":bool(a.sector_constrained),"sector_max_holdings":max(1,int(np.floor(a.top_n*0.25))) if a.sector_constrained else None,"sector_momentum_weight":0.10 if a.sector_constrained else 0.0,"execution_timing_note":"Signals are formed at rebalance close; execution occurs at the close of the configured future trading session. The previously active portfolio earns close-to-close returns through the execution date; the new portfolio starts earning returns on the following session. All trading sessions are retained.", "return_basis":"split_bonus_adjusted_price_returns_ex_dividends; exploratory price-return series, not total return", "total_return_ready":False, "corporate_event_feature_mask_counts":corporate_event_mask_counts, "corporate_event_feature_policy":"Known corporate_event rows mask 6M return, 12M ex-1M return, 200-session DMA/trend and 126-session volatility windows until the event is outside each feature window. No price is imputed or retrospectively adjusted; rows with a masked DMA are excluded from the breadth denominator.", "price_gap_policy":"Forward-fill up to 10 unverified missing sessions; extend mark-to-last-close only on dates marked verified_no_trade by a successfully parsed official NSE EQ bhavcopy. Actual EQ/BE/BZ closes are used for price and held-return continuity; only EQ rows are eligible for new holdings. Raw prices are never fabricated; unverified longer gaps remain missing and fail if held.", "price_series_policy":"EQ/BE/BZ close history for returns; EQ only for new holdings. Trade-to-trade execution frictions are approximated by the existing close-fill/cost model and are not a fill simulation.", "membership_schema":"dated effective intervals (valid_from/valid_to) or explicit dated review snapshots are applied; undated membership inputs are rejected.", "verified_no_trade_ledger":str(no_trade_path) if no_trade_path.exists() else None, "verified_no_trade_pairs":verified_no_trade_pairs, "verified_no_trade_cells_filled":verified_no_trade_cells_filled, "missing_price_cells_before_fill":missing_price_cells_before_fill, "short_stale_price_cells_filled":short_stale_cells_filled, "stale_price_cells_filled":stale_price_cells_filled, "remaining_unverified_missing_cells":remaining_unverified_missing, "note":"Sector-constrained mode uses reconstructed historical NSE sector-index membership; sector momentum is equal-weight mean stock 6M return within the historical sector membership. Unclassified stocks receive neutral sector-momentum rank and are exempt from sector caps."}
     sig.to_csv(out/"rebalance_signals.csv",index=False); dr.to_csv(out/"portfolio_daily.csv",index=False); (out/"metrics.json").write_text(json.dumps(metrics,indent=2)); print(json.dumps(metrics,indent=2))
 
 if __name__=="__main__": main()
