@@ -6,13 +6,11 @@
 
 This ledger separates a lead from verified price-series treatment. A source confirming that a demerger occurred does **not** by itself prove the correct daily adjustment factor or permit a return to be rewritten. Retrieve and retain the original exchange notice, relevant price/series record, retrieval date, and a documented disposition before closing any row.
 
-## Proposed return convention for review
+## Adopted return convention — not yet applied to event prices
 
-For momentum ranking, prefer a shareholder-wealth-continuous series where the distributed security and entitlement can be valued from information available at the time:
+The research convention is documented in [Demerger-aware return convention](demerger_return_convention_2026-10-20.md). It keeps parent-price-only diagnostics separate from shareholder-wealth-continuous lineage returns. A demerger return is eligible for the latter only with documented lineage, entitlement ratio, correct effective timing, contemporaneous defensible valuation, and preceding/event-date parent prices from the intended source series.
 
-`R_t = (P_{parent,t} + V_{distributed,t}) / P_{parent,t-1} - 1`
-
-Here `V_distributed,t` is the value, on the relevant ex-date/valuation date, of securities distributed per one original parent share. Apply only with a documented entitlement ratio, effective timing, and defensible contemporaneous value. If a reliable value is unavailable, leave the event unresolved rather than using a later price with hindsight. This is a **proposal for review**, not an applied adjustment. Keep parent-price-only results separately labelled if that series is also useful.
+For one distributed security, the event-date formula is `R_t = (P_{parent,t} + q P_{child,t}) / P_{parent,t-1} - 1`, where `q` is the confirmed child shares per parent share. No later child listing price or chart-derived factor may be used with hindsight. If contemporaneous value is unavailable, leave the event return unresolved and prevent the event-spanning discontinuity from being interpreted as a clean momentum signal. Do not alter raw prices or call the output total return. This convention is adopted for research governance on 2026-10-20; **it has not been applied to any price row**.
 
 ## Priority A rows
 
