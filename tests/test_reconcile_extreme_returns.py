@@ -36,7 +36,7 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "face_val": "10",
             }]).to_csv(actions, index=False)
 
-            subprocess.run([
+            completed = subprocess.run([
                 sys.executable,
                 str(repo_root / "scripts" / "reconcile_extreme_returns.py"),
                 "--extremes", str(extremes),
@@ -44,7 +44,8 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "--out", str(output),
                 "--supplemental-actions", str(temp / "no-manual-actions.csv"),
                 "--symbol-map-supplement", str(temp / "no-symbol-map.csv"),
-            ], cwd=repo_root, check=True, capture_output=True, text=True)
+            ], cwd=repo_root, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr + "\n" + completed.stdout)
 
             result = pd.read_csv(output).iloc[0]
             self.assertEqual(result["status"], "ACTION_FACTOR_IDENTIFIED")
@@ -77,7 +78,7 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "face_val": "10",
             }]).to_csv(actions, index=False)
 
-            subprocess.run([
+            completed = subprocess.run([
                 sys.executable,
                 str(repo_root / "scripts" / "reconcile_extreme_returns.py"),
                 "--extremes", str(extremes),
@@ -85,7 +86,8 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "--out", str(output),
                 "--supplemental-actions", str(temp / "no-manual-actions.csv"),
                 "--symbol-map-supplement", str(temp / "no-symbol-map.csv"),
-            ], cwd=repo_root, check=True, capture_output=True, text=True)
+            ], cwd=repo_root, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr + "\n" + completed.stdout)
 
             result = pd.read_csv(output).iloc[0]
             self.assertEqual(result["status"], "NO_EXACT_ACTION")
@@ -122,7 +124,7 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "notes": "Listing-session reference-price gain is not a close-to-close daily return.",
             }]).to_csv(verified, index=False)
 
-            subprocess.run([
+            completed = subprocess.run([
                 sys.executable,
                 str(repo_root / "scripts" / "reconcile_extreme_returns.py"),
                 "--extremes", str(extremes),
@@ -132,7 +134,8 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "--supplemental-actions", str(temp / "no-manual-actions.csv"),
                 "--symbol-map", str(temp / "no-symbol-map.csv"),
                 "--symbol-map-supplement", str(temp / "no-symbol-map-supplement.csv"),
-            ], cwd=repo_root, check=True, capture_output=True, text=True)
+            ], cwd=repo_root, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr + "\n" + completed.stdout)
 
             result = pd.read_csv(output).iloc[0]
             self.assertEqual(result["status"], "LISTING_DAY_PRICE_DISCOVERY")
@@ -173,7 +176,7 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "confidence": "high",
             }]).to_csv(manual, index=False)
 
-            subprocess.run([
+            completed = subprocess.run([
                 sys.executable,
                 str(repo_root / "scripts" / "reconcile_extreme_returns.py"),
                 "--extremes", str(extremes),
@@ -182,7 +185,8 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
                 "--supplemental-actions", str(manual),
                 "--symbol-map", str(repo_root / "data" / "input" / "verified_symbol_map.csv"),
                 "--symbol-map-supplement", str(repo_root / "data" / "reference" / "nse_historical_symbol_changes.csv"),
-            ], cwd=repo_root, check=True, capture_output=True, text=True)
+            ], cwd=repo_root, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr + "\n" + completed.stdout)
 
             result = pd.read_csv(output).iloc[0]
             self.assertEqual(result["status"], "ACTION_FACTOR_IDENTIFIED")
