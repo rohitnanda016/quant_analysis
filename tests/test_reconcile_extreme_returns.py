@@ -194,6 +194,7 @@ class ReconcileExtremeReturnsTests(unittest.TestCase):
             self.assertAlmostEqual(float(result["factor_adjusted_return"]), 110.40 * 5.0 / 586.45 - 1, places=6)
             self.assertEqual(result["verified_event_type"], "SPLIT")
             self.assertEqual(result["verified_event_treatment"], "back_adjust_5x")
+            self.assertEqual(result["event_class"], "SPLIT_OR_CONSOLIDATION")
 
 
 if __name__ == "__main__":
