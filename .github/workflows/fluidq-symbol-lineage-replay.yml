@@ -9,6 +9,8 @@ on:
       - ".github/workflows/fluidq-symbol-lineage-replay.yml"
       - "data/reference/nse_historical_symbol_changes.csv"
       - "data/reference/verified_no_trade_evidence.csv"
+      - "data/reference/approved_price_gap_exclusions.csv"
+      - "data/input/verified_corporate_events.csv"
       - "tests/test_price_gap_bhavcopy_parser.py"
       - "scripts/repair_missing_pairs_security_history.py"
       - "scripts/repair_price_gaps_bhavcopy.py"
