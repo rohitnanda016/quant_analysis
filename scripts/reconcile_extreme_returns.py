@@ -107,7 +107,11 @@ ca.columns = [str(c).strip().lower().replace(" ", "_").replace("-", "_") for c i
 ca["symbol"] = ca["symbol"].astype(str).str.upper().str.strip()
 ca["ex_date"] = pd.to_datetime(ca["ex_date"], errors="coerce")
 ca["purpose"] = first_existing_series(ca, ["purpose", "subject"])
-ca[["inferred_factor", "action_type"]] = ca["purpose"].apply(lambda x: pd.Series(parse_factor(x)))
+if ca.empty:
+    ca["inferred_factor"] = pd.Series(dtype="float64")
+    ca["action_type"] = pd.Series(dtype="object")
+else:
+    ca[["inferred_factor", "action_type"]] = ca["purpose"].apply(lambda x: pd.Series(parse_factor(x)))
 ca["event_class"] = ca.apply(lambda r: classify_event(r["purpose"], r["action_type"]), axis=1)
 
 amap = aliases(a.symbol_map, a.symbol_map_supplement)
