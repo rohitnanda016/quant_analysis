@@ -81,6 +81,7 @@ p.add_argument("--symbol-map", required=False, default="")
 p.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
 p.add_argument("--out", required=True)
 p.add_argument("--supplemental-actions", default="data/input/verified_manual_corporate_actions.csv")
+p.add_argument("--verified-events", default="data/input/verified_corporate_events.csv")
 a = p.parse_args()
 
 e = pd.read_csv(a.extremes)
@@ -108,6 +109,16 @@ amap = aliases(a.symbol_map, a.symbol_map_supplement)
 e["lookup_symbol"] = e["symbol"].map(lambda x: amap.get(x, x))
 ca["lookup_symbol"] = ca["symbol"].map(lambda x: amap.get(x, x))
 
+# The same documented action can appear in both the NSE feed and the manual
+# evidence ledger. Deduplicate equivalent parsed factors after ticker aliases
+# are normalized, or identical 5x/10x actions could be multiplied twice.
+ca["_factor"] = pd.to_numeric(ca["inferred_factor"], errors="coerce")
+parsed_action = ca["_factor"].notna()
+ca_parsed = ca.loc[parsed_action].drop_duplicates(
+    subset=["lookup_symbol", "ex_date", "_factor", "action_type"], keep="first"
+)
+ca_unparsed = ca.loc[~parsed_action]
+ca = pd.concat([ca_parsed, ca_unparsed], axis=0).sort_index()
 ca["has_action"] = ca["purpose"].str.len().fillna(0).gt(0)
 ca["_factor"] = pd.to_numeric(ca["inferred_factor"], errors="coerce")
 ca["_factor_for_product"] = ca["_factor"].fillna(1.0)
@@ -150,6 +161,52 @@ has_parsed_split_bonus_factor = (
 m.loc[has_parsed_split_bonus_factor, "status"] = "ACTION_FACTOR_IDENTIFIED"
 m.loc[has & m["inferred_factor"].isna(), "status"] = "ACTION_ON_DATE_NON_PRICE_FACTOR"
 
+# Apply explicit event dispositions only when no same-date action was matched.
+# This separates IPO listing-session price discovery and documented genuine
+# market moves from true corporate-action gaps; it never synthesizes a factor.
+m["verified_event_type"] = ""
+m["verified_event_treatment"] = ""
+m["verified_event_source"] = ""
+m["verified_event_confidence"] = ""
+m["verified_event_notes"] = ""
+verified_path = Path(a.verified_events)
+if verified_path.exists():
+    ve = pd.read_csv(verified_path, low_memory=False)
+    required = {"symbol", "event_date", "event_type", "treatment"}
+    if required.issubset(ve.columns):
+        ve["symbol"] = ve["symbol"].astype(str).str.upper().str.strip()
+        ve["event_date"] = pd.to_datetime(ve["event_date"], errors="coerce", format="mixed")
+        ve["lookup_symbol"] = ve["symbol"].map(lambda x: amap.get(x, x))
+        ve = ve.dropna(subset=["event_date"])
+        ve_map = {}
+        for _, event in ve.iterrows():
+            ve_map[(str(event["lookup_symbol"]), pd.Timestamp(event["event_date"]))] = event
+        for row_idx in m.index[m["status"].eq("NO_EXACT_ACTION")]:
+            event = ve_map.get((str(m.at[row_idx, "lookup_symbol"]), pd.Timestamp(m.at[row_idx, "date"])))
+            if event is None:
+                continue
+            event_type = str(event.get("event_type", "")).strip().upper()
+            treatment = str(event.get("treatment", "")).strip().lower()
+            if event_type == "IPO_LISTING_DAY":
+                m.at[row_idx, "status"] = "LISTING_DAY_PRICE_DISCOVERY"
+                m.at[row_idx, "event_class"] = "IPO_LISTING"
+            elif event_type == "GENUINE_MARKET_MOVE":
+                if "pending_source_price_check" in treatment:
+                    m.at[row_idx, "status"] = "GENUINE_MARKET_MOVE_PRICE_RECHECK"
+                else:
+                    m.at[row_idx, "status"] = "GENUINE_MARKET_MOVE_CONFIRMED"
+                m.at[row_idx, "event_class"] = "GENUINE_MARKET_MOVE"
+            elif event_type in {"SPLIT", "BONUS", "SPLIT_OR_BONUS"}:
+                # A documented event without a parseable, same-day factor must
+                # remain an action-evidence issue rather than being called no action.
+                m.at[row_idx, "status"] = "VERIFIED_SPLIT_ACTION_FACTOR_REVIEW"
+                m.at[row_idx, "event_class"] = event_type
+            m.at[row_idx, "verified_event_type"] = event_type
+            m.at[row_idx, "verified_event_treatment"] = treatment
+            m.at[row_idx, "verified_event_source"] = str(event.get("source", ""))
+            m.at[row_idx, "verified_event_confidence"] = str(event.get("confidence", ""))
+            m.at[row_idx, "verified_event_notes"] = str(event.get("notes", ""))
+
 # Add nearby corporate-action context for manual review. Do not promote a
 # nearby event to an exact match: ex-date proximity alone is not proof that
 # the event explains the observed price discontinuity.
@@ -189,11 +246,11 @@ for row_idx in m.index[review_mask]:
     m.at[row_idx, "nearby_action_class"] = str(nearest["event_class"])
     m.at[row_idx, "nearby_action_factor"] = nearest["inferred_factor"]
 
-cols = ["symbol","date","prev_close","close","return","observed_factor","inferred_factor","observed_ratio_deviation","factor_error","factor_adjusted_return","symbol_action","purpose","event_class","ex_date","record_date","face_value","action_type","status","nearby_action_date","nearby_action_distance_days","nearby_action_purpose","nearby_action_class","nearby_action_factor"]
+cols = ["symbol","date","prev_close","close","return","observed_factor","inferred_factor","observed_ratio_deviation","factor_error","factor_adjusted_return","symbol_action","purpose","event_class","ex_date","record_date","face_value","action_type","status","verified_event_type","verified_event_treatment","verified_event_source","verified_event_confidence","verified_event_notes","nearby_action_date","nearby_action_distance_days","nearby_action_purpose","nearby_action_class","nearby_action_factor"]
 cols = [c for c in cols if c in m.columns]
 m[cols].sort_values(["date","symbol"]).to_csv(a.out, index=False)
 
-rank = {"ACTION_FACTOR_IDENTIFIED":0,"ACTION_ON_DATE_NON_PRICE_FACTOR":1,"ACTION_ON_DATE":2,"NO_EXACT_ACTION":3}
+rank = {"ACTION_FACTOR_IDENTIFIED":0,"LISTING_DAY_PRICE_DISCOVERY":0,"GENUINE_MARKET_MOVE_CONFIRMED":0,"GENUINE_MARKET_MOVE_PRICE_RECHECK":0,"VERIFIED_SPLIT_ACTION_FACTOR_REVIEW":1,"ACTION_ON_DATE_NON_PRICE_FACTOR":1,"ACTION_ON_DATE":2,"NO_EXACT_ACTION":3}
 m["_rank"] = m["status"].map(rank).fillna(99)
 best = m.sort_values(["symbol","date","_rank","factor_error"], na_position="last").drop_duplicates(["symbol","date"], keep="first")
 
