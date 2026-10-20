@@ -162,6 +162,9 @@ prev_close = pd.to_numeric(m["prev_close"], errors="coerce")
 close = pd.to_numeric(m["close"], errors="coerce")
 m["factor_adjusted_return"] = close * m["inferred_factor"] / prev_close - 1
 m["status"] = "NO_EXACT_ACTION"
+# Empty action joins may infer event_class as float64; later verified-event
+# labels are strings, so normalize the dtype before row-wise dispositions.
+m["event_class"] = m["event_class"].astype("object")
 
 has = m["has_action"].fillna(False)
 m.loc[has, "status"] = "ACTION_ON_DATE"
