@@ -104,6 +104,10 @@ if Path(a.supplemental_actions).exists():
     ca = pd.concat([ca, sup], ignore_index=True, sort=False)
 
 ca.columns = [str(c).strip().lower().replace(" ", "_").replace("-", "_") for c in ca.columns]
+# Keep optional fields available for minimal test fixtures and alternate historical exports.
+for optional_column in ("rec_date", "face_val"):
+    if optional_column not in ca.columns:
+        ca[optional_column] = ""
 ca["symbol"] = ca["symbol"].astype(str).str.upper().str.strip()
 ca["ex_date"] = pd.to_datetime(ca["ex_date"], errors="coerce")
 ca["purpose"] = first_existing_series(ca, ["purpose", "subject"])
