@@ -57,3 +57,23 @@ Here `V_distributed,t` is the value, on the relevant ex-date/valuation date, of 
 - Preserve unresolved observations and record why any row is accepted, adjusted, excluded, or left unresolved.
 - Keep 2026-09-01 through 2027-08-31 excluded from tuning/model selection.
 - Record original URL, retrieval timestamp, event effective date, source-price check, entitlement ratio, valuation method, factor, reviewer and disposition for each closure.
+
+
+## Follow-up exchange-source research — 2026-10-20
+
+The public exchange search surfaced additional event-date records for several rows. These improve event identification, but do **not** by themselves establish the appropriate return adjustment or distributed-security value.
+
+| Observation | Source result | What it supports | What remains open |
+|---|---|---|---|
+| SFCL, 2015-04-23 | [NSE corporate filings for SFCL](https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol=SFCL&tabIndex=sme) shows a Scheme of Arrangement filing on 10-Apr-2015 and a record-date filing for 24-Apr-2015. | A scheme/record-date event exists around the flagged session. | Retrieve the scheme terms and exact effective/ex-date; establish entitlement, distributed-security valuation and correct parent/security lineage. |
+| ADANIENT, 2015-06-03 | [MSEI corporate actions for ADANIENT](https://www.msei.in/corporates/corporate-securities-information/corporate-update/default?symbol=ADANIENT&type=4&vmode=vm) lists 03-Jun-2015 as the ex-date for a Scheme of Arrangement and 04-Jun-2015 as the record date. | Exchange-listed event date and event type corroborated. | Obtain the scheme/entitlement terms and contemporaneous valuation inputs; no split factor inferred. |
+| CGPOWER, 2016-03-15 | [MSEI corporate actions for CGPOWER](https://www.msei.in/corporates/corporate-securities-information/corporate-update/default?symbol=CGPOWER&type=4&vmode=vm) lists 15-Mar-2016 as the ex-date for a Scheme of Arrangement. | Exchange-listed event date and event type corroborated. | Obtain scheme terms, security lineage, entitlement and defensible valuation. |
+| IDFC, 2015-10-01 | [NSE corporate actions for IDFC](https://www.nseindia.com/companies-listing/corporate-filings-actions?symbol=IDFC) lists an EQ-series Demerger with ex-date 01-Oct-2015 and record date 05-Oct-2015. | NSE record directly supports event type and date. | Confirm the exact entitlement/issued-security terms and contemporaneous distributed-security valuation; preserve series-specific price evidence. |
+| SINTEX, 2017-05-25 | [Business Standard's contemporaneous report](https://www.business-standard.com/amp/article/markets/sintex-industries-trades-ex-spin-off-117052500315_1.html) states the stock began trading ex-scheme on 25-May-2017 and cites 26-May-2017 as record date. | Strong date/context corroboration. | Locate/retain the underlying exchange/company scheme notice and entitlement terms before valuation. |
+| ARVIND, 2018-11-28 | [Contemporaneous report](https://timesofindia.indiatimes.com/business/india-business/arvind-shares-down-71-as-it-adjusts-for-demerger/articleshow/66841209.cms) states ARVIND traded ex-demerger on 28-Nov-2018; the [NSE-hosted Arvind Infrastructure scheme document](https://nsearchives.nseindia.com/corporates/offerdocument/scheme/IM_ARVINFRA_Scheme.pdf) establishes an earlier scheme/undertaking transfer. | Event context and scheme relationship supported. | Reconcile which demerged entity and entitlement correspond to this particular Replay observation; contemporaneous valuation still required. |
+
+### Retrieval limitation for the four raw-price checks
+
+The exact legacy NSE daily ZIP URLs for RCOM (2018-05-17), JETAIRWAYS (2019-06-20), YESBANK (2020-03-06), and YESBANK (2020-03-17) were tried via the available retrieval interface but could not be opened there. NSE's official [EOD/historical data page](https://www.nseindia.com/static/market-data/eod-historical-data-subscription) directs historical-data requests to marketdata@nse.co.in or +91-22-2659 8385. The rows remain blocked and unchanged until a raw NSE bhavcopy or the exact original vendor export is obtained. No secondary reported close has been substituted.
+
+These follow-up findings are research leads and partial event verification only. No proposed shareholder-wealth-continuous formula has been applied, no non-price event has been closed for return treatment, and the dividend/readiness gates remain blocked.
