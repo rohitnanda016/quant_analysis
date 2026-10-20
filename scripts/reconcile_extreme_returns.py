@@ -186,12 +186,22 @@ if verified_path.exists():
         ve_map = {}
         for _, event in ve.iterrows():
             ve_map[(str(event["lookup_symbol"]), pd.Timestamp(event["event_date"]))] = event
-        for row_idx in m.index[m["status"].eq("NO_EXACT_ACTION")]:
+        for row_idx in m.index:
             event = ve_map.get((str(m.at[row_idx, "lookup_symbol"]), pd.Timestamp(m.at[row_idx, "date"])))
             if event is None:
                 continue
             event_type = str(event.get("event_type", "")).strip().upper()
             treatment = str(event.get("treatment", "")).strip().lower()
+            m.at[row_idx, "verified_event_type"] = event_type
+            m.at[row_idx, "verified_event_treatment"] = treatment
+            m.at[row_idx, "verified_event_source"] = str(event.get("source", ""))
+            m.at[row_idx, "verified_event_confidence"] = str(event.get("confidence", ""))
+            m.at[row_idx, "verified_event_notes"] = str(event.get("notes", ""))
+
+            # Evidence is attached to every matching row. Only replace
+            # NO_EXACT_ACTION when there is no same-date parsed action match.
+            if str(m.at[row_idx, "status"]) != "NO_EXACT_ACTION":
+                continue
             if event_type == "IPO_LISTING_DAY":
                 m.at[row_idx, "status"] = "LISTING_DAY_PRICE_DISCOVERY"
                 m.at[row_idx, "event_class"] = "IPO_LISTING"
@@ -206,11 +216,6 @@ if verified_path.exists():
                 # remain an action-evidence issue rather than being called no action.
                 m.at[row_idx, "status"] = "VERIFIED_SPLIT_ACTION_FACTOR_REVIEW"
                 m.at[row_idx, "event_class"] = event_type
-            m.at[row_idx, "verified_event_type"] = event_type
-            m.at[row_idx, "verified_event_treatment"] = treatment
-            m.at[row_idx, "verified_event_source"] = str(event.get("source", ""))
-            m.at[row_idx, "verified_event_confidence"] = str(event.get("confidence", ""))
-            m.at[row_idx, "verified_event_notes"] = str(event.get("notes", ""))
 
 # Add nearby corporate-action context for manual review. Do not promote a
 # nearby event to an exact match: ex-date proximity alone is not proof that
