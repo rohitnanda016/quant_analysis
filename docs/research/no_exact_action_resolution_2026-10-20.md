@@ -62,6 +62,8 @@ The original post-adjustment audit labelled all 34 as `series_start=True`; each 
 
 Rule: these observations are retained for audit/history and marked `LISTING_DAY_PRICE_DISCOVERY`; they are not synthetic daily returns. Subsequent close-to-close returns continue normally once there is an actual previous listed-session close.
 
+**Backtest integration check:** `scripts/run_fluidq_backtest.py` builds held-portfolio returns from the close-price panel using `pct_change(fill_method=None)` rather than the source `prev_close` field; a symbol's first close has no prior close in that panel and therefore produces no first-day close-to-close return. New holdings are executed at a future session close and begin earning returns on the following session. This check supports keeping the IPO reference-price gain in the audit as `LISTING_DAY_PRICE_DISCOVERY` without changing the close-to-close return formula.
+
 ## Split/bonus events hidden by ticker lineage — 2 rows resolved
 
 | Original row | Actual action | Evidence / lineage repair | Previous close → ex-date close | Residual return after factor |
