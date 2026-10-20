@@ -129,16 +129,26 @@ ca_group = (
 ca_group.loc[ca_group["factor_count"] == 0, "inferred_factor"] = float("nan")
 
 m = e.merge(ca_group, how="left", left_on=["lookup_symbol", "date"], right_on=["lookup_symbol", "ex_date"], suffixes=("_extreme", "_action"))
-m["factor_error"] = abs(m["observed_factor"] / m["inferred_factor"] - 1)
+m["observed_ratio_deviation"] = m["observed_factor"] / m["inferred_factor"] - 1
+# Retain the previous field as a compatibility diagnostic. A difference between
+# previous-close/close and a split/bonus factor includes the genuine market move
+# on the ex-date; it is not, by itself, evidence that the action factor is wrong.
+m["factor_error"] = m["observed_ratio_deviation"].abs()
+prev_close = pd.to_numeric(m["prev_close"], errors="coerce")
+close = pd.to_numeric(m["close"], errors="coerce")
+m["factor_adjusted_return"] = close * m["inferred_factor"] / prev_close - 1
 m["status"] = "NO_EXACT_ACTION"
 
 has = m["has_action"].fillna(False)
 m.loc[has, "status"] = "ACTION_ON_DATE"
 
-exact_factor = has & m["inferred_factor"].notna() & (m["factor_error"] <= 0.08)
-m.loc[exact_factor, "status"] = "EXACT_SPLIT_BONUS_RATIO_MATCH"
+has_parsed_split_bonus_factor = (
+    has
+    & m["inferred_factor"].notna()
+    & m["action_type"].fillna("").astype(str).str.len().gt(0)
+)
+m.loc[has_parsed_split_bonus_factor, "status"] = "ACTION_FACTOR_IDENTIFIED"
 m.loc[has & m["inferred_factor"].isna(), "status"] = "ACTION_ON_DATE_NON_PRICE_FACTOR"
-m.loc[has & m["inferred_factor"].notna() & (m["factor_error"] > 0.08), "status"] = "ACTION_RATIO_MISMATCH"
 
 # Add nearby corporate-action context for manual review. Do not promote a
 # nearby event to an exact match: ex-date proximity alone is not proof that
@@ -149,7 +159,7 @@ m["nearby_action_purpose"] = ""
 m["nearby_action_class"] = ""
 m["nearby_action_factor"] = pd.NA
 
-review_mask = m["status"].isin(["NO_EXACT_ACTION", "ACTION_RATIO_MISMATCH", "ACTION_ON_DATE_NON_PRICE_FACTOR"])
+review_mask = m["status"].isin(["NO_EXACT_ACTION", "ACTION_ON_DATE_NON_PRICE_FACTOR"])
 nearby_index = {}
 for lookup_symbol, group in ca_group.dropna(subset=["ex_date"]).groupby("lookup_symbol", sort=False):
     nearby_index[str(lookup_symbol)] = group.sort_values("ex_date")
@@ -179,11 +189,11 @@ for row_idx in m.index[review_mask]:
     m.at[row_idx, "nearby_action_class"] = str(nearest["event_class"])
     m.at[row_idx, "nearby_action_factor"] = nearest["inferred_factor"]
 
-cols = ["symbol","date","prev_close","close","return","observed_factor","symbol_action","purpose","event_class","ex_date","record_date","face_value","inferred_factor","action_type","factor_error","status","nearby_action_date","nearby_action_distance_days","nearby_action_purpose","nearby_action_class","nearby_action_factor"]
+cols = ["symbol","date","prev_close","close","return","observed_factor","inferred_factor","observed_ratio_deviation","factor_error","factor_adjusted_return","symbol_action","purpose","event_class","ex_date","record_date","face_value","action_type","status","nearby_action_date","nearby_action_distance_days","nearby_action_purpose","nearby_action_class","nearby_action_factor"]
 cols = [c for c in cols if c in m.columns]
 m[cols].sort_values(["date","symbol"]).to_csv(a.out, index=False)
 
-rank = {"EXACT_SPLIT_BONUS_RATIO_MATCH":0,"ACTION_ON_DATE_NON_PRICE_FACTOR":1,"ACTION_RATIO_MISMATCH":2,"ACTION_ON_DATE":3,"NO_EXACT_ACTION":4}
+rank = {"ACTION_FACTOR_IDENTIFIED":0,"ACTION_ON_DATE_NON_PRICE_FACTOR":1,"ACTION_ON_DATE":2,"NO_EXACT_ACTION":3}
 m["_rank"] = m["status"].map(rank).fillna(99)
 best = m.sort_values(["symbol","date","_rank","factor_error"], na_position="last").drop_duplicates(["symbol","date"], keep="first")
 
