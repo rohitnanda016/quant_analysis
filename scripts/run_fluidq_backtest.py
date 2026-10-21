@@ -79,6 +79,21 @@ def canonicalize_symbol(series):
     return series.astype(str).str.upper().str.strip().replace(SYMBOL_ALIASES)
 
 
+def fill_verified_no_trade_prices(price_panel, verified_no_trade_mask):
+    """Fill only missing marks explicitly verified as no-trade sessions.
+
+    Unverified gaps remain NaN so a held-position return cannot be fabricated
+    by carrying the previous close forward.
+    """
+    if not price_panel.index.equals(verified_no_trade_mask.index) or not price_panel.columns.equals(verified_no_trade_mask.columns):
+        raise ValueError("Verified no-trade mask must align exactly with the price panel.")
+    verified_mask = verified_no_trade_mask.fillna(False).astype(bool)
+    fill_cells = price_panel.isna() & verified_mask
+    last_observed = price_panel.ffill()
+    filled = price_panel.mask(fill_cells, last_observed)
+    return filled, int(fill_cells.sum().sum())
+
+
 def mask_unresolved_corporate_event_windows(frame, events):
     """Mask price-derived features while known scheme discontinuities contaminate them.
 
@@ -493,10 +508,9 @@ def main():
             if dd in row_lookup and sym in col_lookup:
                 verified_no_trade_mask.at[row_lookup[dd],col_lookup[sym]]=True
 
-    unlimited_filled=price_panel.ffill()
-    verified_fill_cells=price_panel.isna() & verified_no_trade_mask
-    verified_no_trade_cells_filled=int(verified_fill_cells.sum())
-    price_panel=price_panel.mask(verified_fill_cells,unlimited_filled)
+    price_panel, verified_no_trade_cells_filled = fill_verified_no_trade_prices(
+        price_panel, verified_no_trade_mask
+    )
     stale_price_cells_filled=missing_price_cells_before_fill-int(price_panel.isna().sum().sum())
     remaining_unverified_missing=int(price_panel.isna().sum().sum())
     price_returns=price_panel.pct_change(fill_method=None)
