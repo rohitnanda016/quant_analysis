@@ -133,128 +133,131 @@ def fetch_symbol(sym, start, end, chunk_days):
     return pd.DataFrame(), errors
 
 
-p = argparse.ArgumentParser()
-p.add_argument("--start", required=True)
-p.add_argument("--end", required=True)
-p.add_argument("--membership", default=MEM)
-p.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
-p.add_argument("--out", default="data/raw/stage_a_prices.csv")
-p.add_argument("--sleep", type=float, default=0.2)
-p.add_argument("--chunk-days", type=int, default=365)
-p.add_argument("--workers", type=int, default=6)
-a = p.parse_args()
 
-start = pd.Timestamp(a.start)
-end = pd.Timestamp(a.end)
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--start", required=True)
+    p.add_argument("--end", required=True)
+    p.add_argument("--membership", default=MEM)
+    p.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
+    p.add_argument("--out", default="data/raw/stage_a_prices.csv")
+    p.add_argument("--sleep", type=float, default=0.2)
+    p.add_argument("--chunk-days", type=int, default=365)
+    p.add_argument("--workers", type=int, default=6)
+    a = p.parse_args()
 
-sm = pd.read_csv(a.symbol_map)
-sm["old_symbol"] = sm.old_symbol.astype(str).str.strip().str.upper()
-sm["new_symbol"] = sm.new_symbol.astype(str).str.strip().str.upper()
-fallback = {r.old_symbol: r.new_symbol for _, r in sm.iterrows()}
+    start = pd.Timestamp(a.start)
+    end = pd.Timestamp(a.end)
 
-m = pd.read_csv(a.membership)
-m.columns = [str(c).strip().lower().replace(" ", "_") for c in m.columns]
-m.symbol = m.symbol.astype(str).str.strip().str.upper()
-m.valid_from = pd.to_datetime(m.valid_from, errors="coerce")
-m.valid_to = pd.to_datetime(m.valid_to, errors="coerce").fillna(end)
+    sm = pd.read_csv(a.symbol_map)
+    sm["old_symbol"] = sm.old_symbol.astype(str).str.strip().str.upper()
+    sm["new_symbol"] = sm.new_symbol.astype(str).str.strip().str.upper()
+    fallback = {r.old_symbol: r.new_symbol for _, r in sm.iterrows()}
 
-acq_col = "acquisition_symbol" if "acquisition_symbol" in m.columns else "symbol"
-syms = sorted(
-    m.loc[(m.valid_from <= end) & (m.valid_to >= start), acq_col]
-    .dropna().astype(str).str.upper().unique()
-)
+    m = pd.read_csv(a.membership)
+    m.columns = [str(c).strip().lower().replace(" ", "_") for c in m.columns]
+    m.symbol = m.symbol.astype(str).str.strip().str.upper()
+    m.valid_from = pd.to_datetime(m.valid_from, errors="coerce")
+    m.valid_to = pd.to_datetime(m.valid_to, errors="coerce").fillna(end)
 
-Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    acq_col = "acquisition_symbol" if "acquisition_symbol" in m.columns else "symbol"
+    syms = sorted(
+        m.loc[(m.valid_from <= end) & (m.valid_to >= start), acq_col]
+        .dropna().astype(str).str.upper().unique()
+    )
 
-print(
-    f"ACQUISITION: {len(syms)} symbols, {start.date()} to {end.date()}, "
-    f"chunk_days={a.chunk_days}, workers={a.workers}",
-    flush=True,
-)
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
 
-parts = []
-failures = []
-completed = 0
+    print(
+        f"ACQUISITION: {len(syms)} symbols, {start.date()} to {end.date()}, "
+        f"chunk_days={a.chunk_days}, workers={a.workers}",
+        flush=True,
+    )
 
-with ThreadPoolExecutor(max_workers=a.workers) as ex:
-    future_map = {
-        ex.submit(fetch_symbol, sym, start, end, a.chunk_days): sym
-        for sym in syms
-    }
+    parts = []
+    failures = []
+    completed = 0
 
-    for fut in as_completed(future_map):
-        sym = future_map[fut]
-        try:
-            d, errs = fut.result()
-            if len(d):
-                parts.append(d)
-            else:
-                failures.extend(errs or [{
+    with ThreadPoolExecutor(max_workers=a.workers) as ex:
+        future_map = {
+            ex.submit(fetch_symbol, sym, start, end, a.chunk_days): sym
+            for sym in syms
+        }
+
+        for fut in as_completed(future_map):
+            sym = future_map[fut]
+            try:
+                d, errs = fut.result()
+                if len(d):
+                    parts.append(d)
+                else:
+                    failures.extend(errs or [{
+                        "symbol": sym,
+                        "chunk_start": str(start.date()),
+                        "chunk_end": str(end.date()),
+                        "error": "no_data",
+                    }])
+
+                # If an old symbol is known, retry the complete symbol history using its
+                # mapped NSE symbol only when the primary acquisition returned nothing.
+                if len(d) == 0 and sym in fallback and fallback[sym] != sym:
+                    d2, errs2 = fetch_symbol(fallback[sym], start, end, a.chunk_days)
+                    if len(d2):
+                        d2["requested_symbol"] = sym
+                        d2["source_symbol"] = fallback[sym]
+                        parts.append(d2)
+                        failures = [x for x in failures if x.get("symbol") != sym]
+                    else:
+                        failures.extend(errs2)
+
+            except Exception as e:
+                failures.append({
                     "symbol": sym,
                     "chunk_start": str(start.date()),
                     "chunk_end": str(end.date()),
-                    "error": "no_data",
-                }])
+                    "error": f"worker:{type(e).__name__}:{str(e)[:180]}",
+                })
 
-            # If an old symbol is known, retry the complete symbol history using its
-            # mapped NSE symbol only when the primary acquisition returned nothing.
-            if len(d) == 0 and sym in fallback and fallback[sym] != sym:
-                d2, errs2 = fetch_symbol(fallback[sym], start, end, a.chunk_days)
-                if len(d2):
-                    d2["requested_symbol"] = sym
-                    d2["source_symbol"] = fallback[sym]
-                    parts.append(d2)
-                    failures = [x for x in failures if x.get("symbol") != sym]
-                else:
-                    failures.extend(errs2)
+            completed += 1
+            if completed % 25 == 0 or completed == len(syms):
+                rows = sum(len(x) for x in parts)
+                failed_symbols = len({x["symbol"] for x in failures})
+                print(
+                    f"processed {completed}/{len(syms)} rows={rows} "
+                    f"failed_symbols={failed_symbols} failed_chunks={len(failures)}",
+                    flush=True,
+                )
+            time.sleep(a.sleep)
 
-        except Exception as e:
-            failures.append({
-                "symbol": sym,
-                "chunk_start": str(start.date()),
-                "chunk_end": str(end.date()),
-                "error": f"worker:{type(e).__name__}:{str(e)[:180]}",
-            })
+    x = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if len(x):
+        x = (
+            x.dropna(subset=["date", "symbol"])
+             .drop_duplicates(["date", "symbol"])
+             .sort_values(["date", "symbol"])
+        )
 
-        completed += 1
-        if completed % 25 == 0 or completed == len(syms):
-            rows = sum(len(x) for x in parts)
-            failed_symbols = len({x["symbol"] for x in failures})
-            print(
-                f"processed {completed}/{len(syms)} rows={rows} "
-                f"failed_symbols={failed_symbols} failed_chunks={len(failures)}",
-                flush=True,
-            )
-        time.sleep(a.sleep)
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    x.to_csv(a.out, index=False)
 
-x = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-if len(x):
-    x = (
-        x.dropna(subset=["date", "symbol"])
-         .drop_duplicates(["date", "symbol"])
-         .sort_values(["date", "symbol"])
-    )
+    audit = {
+        "start": a.start,
+        "end": a.end,
+        "symbols_requested": len(syms),
+        "chunk_days": a.chunk_days,
+        "workers": a.workers,
+        "symbols_returned": int(x.symbol.nunique()) if len(x) else 0,
+        "rows": len(x),
+        "failed_chunks": len(failures),
+        "failed_symbols": sorted({z["symbol"] for z in failures}),
+        "failure_examples": failures[:100],
+    }
+    Path(a.out).with_suffix(".audit.json").write_text(json.dumps(audit, indent=2))
 
-Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-x.to_csv(a.out, index=False)
+    print(json.dumps({
+        "rows": len(x),
+        "symbols": int(x.symbol.nunique()) if len(x) else 0,
+        "failed_symbols": len(audit["failed_symbols"]),
+        "failed_chunks": len(failures),
+    }, indent=2))
 
-audit = {
-    "start": a.start,
-    "end": a.end,
-    "symbols_requested": len(syms),
-    "chunk_days": a.chunk_days,
-    "workers": a.workers,
-    "symbols_returned": int(x.symbol.nunique()) if len(x) else 0,
-    "rows": len(x),
-    "failed_chunks": len(failures),
-    "failed_symbols": sorted({z["symbol"] for z in failures}),
-    "failure_examples": failures[:100],
-}
-Path(a.out).with_suffix(".audit.json").write_text(json.dumps(audit, indent=2))
-
-print(json.dumps({
-    "rows": len(x),
-    "symbols": int(x.symbol.nunique()) if len(x) else 0,
-    "failed_symbols": len(audit["failed_symbols"]),
-    "failed_chunks": len(failures),
-}, indent=2))

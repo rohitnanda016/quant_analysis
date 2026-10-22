@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Unit test legacy and UDiFF archive parsing
+        run: python -m unittest discover -s tests -p "test_price_gap_bhavcopy_parser.py"
+
       - name: Validate run parameters
         env:
           STAGE: ${{ inputs.stage }}
@@ -140,42 +143,28 @@ jobs:
             --end "${{ inputs.end_date }}" \
             --chunk-days 31 --sleep 0.5
 
-      - name: Repair remaining gaps from NSE daily bhavcopy
-        if: ${{ inputs.stage == 'stage-a' }}
+      - name: Repair long internal price gaps from official NSE daily bhavcopy
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
-          python - <<'PY'
-          import io,time
-          import pandas as pd
-          from jugaad_data.nse import NSEArchives
-          path='data/raw/stage_a_prices.csv'
-          x=pd.read_csv(path,low_memory=False)
-          x['date']=pd.to_datetime(x['date'],errors='coerce')
-          x['symbol']=x['symbol'].astype(str).str.strip().str.upper()
-          targets={'ALOKINDS','JSWENERGY','FLUOROCHEM','TRIDENT','TTML','BCG','ATGL','ADANITRANS','ADANIENSOL','HAPPSTMNDS','SUPPETRO','CGPOWER','NAZARA'}
-          keys=set(zip(x.date,x.symbol)); add=[]; nse=NSEArchives()
-          for dt in sorted(x.date.dropna().unique()):
-              d=pd.Timestamp(dt); absent=targets-{s for dd,s in keys if dd==d}
-              if not absent: continue
-              try:
-                  raw=nse.bhavcopy_old_raw(d.to_pydatetime())
-                  if isinstance(raw,bytes): raw=raw.decode('utf-8-sig','replace')
-                  q=pd.read_csv(io.StringIO(raw)); q.columns=[' '.join(str(z).replace('\ufeff','').strip().strip(chr(34)).split()).upper() for z in q.columns]
-                  if 'SYMBOL' not in q.columns: continue
-                  q['SYMBOL']=q['SYMBOL'].astype(str).str.strip().str.upper(); q=q[q.SYMBOL.isin(absent)].copy()
-                  if len(q):
-                      q=q.rename(columns={'SYMBOL':'symbol','SERIES':'series','OPEN':'open','HIGH':'high','LOW':'low','LAST':'last','CLOSE':'close','PREV_CLOSE':'prev_close','TOTTRDQTY':'volume','TOTTRDVAL':'traded_value'}); q['date']=d; q['requested_symbol']=q['symbol']; q['repair_source']='nse_daily_bhavcopy'; add.append(q)
-              except Exception as e: print('bhavcopy error',d.date(),e,flush=True)
-              time.sleep(.35)
-          if add:
-              a=pd.concat(add,ignore_index=True).drop_duplicates(['date','symbol']); a=a[[ (r.date,r.symbol) not in keys for _,r in a.iterrows() ]]
-              for col in x.columns:
-                  if col not in a.columns: a[col]=pd.NA
-              x=pd.concat([x,a[x.columns]],ignore_index=True)
-          x=x.drop_duplicates(['date','symbol']).sort_values(['date','symbol']); x.to_csv(path,index=False)
-          print('daily bhavcopy rows added',len(add),'final rows',len(x),flush=True)
-          PY
+          mkdir -p data/input results/latest
+          python scripts/repair_price_gaps_bhavcopy.py \
+            --prices data/raw/stage_a_prices.csv \
+            --out data/raw/stage_a_prices_repaired.csv \
+            --no-trade-out data/input/verified_no_trade_dates.csv \
+            --exceptions-out data/input/unresolved_gap_exceptions.csv \
+            --report results/latest/bhavcopy_gap_repair.json \
+            --start "${{ inputs.start_date }}" --end "${{ inputs.end_date }}" \
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500
+          mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
+
+      - name: Audit raw price quality
+        id: raw_audit
+        continue-on-error: true
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
+        run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
 
       - name: Build V6.2 identity
+        continue-on-error: true
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/build_v6_2_identity.py \
@@ -184,12 +173,25 @@ jobs:
             --symbol-map data/input/verified_symbol_map.csv
 
       - name: Audit coverage
+        id: audit_coverage
+        continue-on-error: true
         if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
         run: |
           python scripts/audit_v6_2_gaps.py \
             --prices data/processed/v6_2/prices_with_canonical_symbol.csv \
             --membership data/processed/v6_2/membership_with_canonical_symbol.csv \
             --outdir results/latest
+
+      - name: Gate source gaps and publish an explicit readiness report
+        id: gap_gate
+        if: ${{ inputs.stage == 'stage-a' || inputs.stage == 'full-history' || inputs.stage == 'repair-full-history' }}
+        run: |
+          python scripts/audit_price_gap_readiness.py \
+            --prices data/raw/stage_a_prices.csv \
+            --repair-report results/latest/bhavcopy_gap_repair.json \
+            --verified-no-trade data/input/verified_no_trade_dates.csv \
+            --symbol-map data/input/verified_symbol_map.csv \
+            --report results/latest/price_gap_readiness.json
 
       - name: Metadata
         run: |
@@ -209,13 +211,37 @@ jobs:
           START_DATE: ${{ inputs.start_date }}
           END_DATE: ${{ inputs.end_date }}
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload diagnostic artifact even when readiness is blocked
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-diagnostic-${{ inputs.stage }}-${{ github.run_id }}
+          path: |
+            data/raw/
+            data/processed/v6_2/
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/unresolved_gap_exceptions.csv
+            data/input/verified_symbol_map.csv
+            results/latest/
+            results/price_quality/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish research-input artifact only when source gate passes
+        if: ${{ (inputs.stage != 'stage-a' && inputs.stage != 'full-history' && inputs.stage != 'repair-full-history') || (steps.gap_gate.outcome == 'success' && steps.audit_coverage.outcome == 'success') }}
+        uses: actions/upload-artifact@v4
         with:
           name: fluidq-${{ inputs.stage }}-${{ github.run_id }}
           path: |
             data/raw/
             data/processed/v6_2/
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/verified_symbol_map.csv
             results/latest/
+            results/price_quality/
+          if-no-files-found: error
           retention-days: 30
 
       - name: Commit compact results

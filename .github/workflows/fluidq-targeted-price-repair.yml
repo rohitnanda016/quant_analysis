@@ -1,0 +1,222 @@
+name: FLUID-Q Targeted Price Gap Repair
+
+# This multi-hour archive repair is intentionally dispatch-only. A normal code
+# push must not enqueue a fresh scan against an old checkpoint.
+on:
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "Finalized full-history workflow run whose raw data should be repaired"
+        required: true
+      checkpoint_run_id:
+        description: "Optional prior repair run ID whose checkpoint artifact should be restored"
+        required: false
+        default: ""
+      batch_size:
+        description: "Maximum archive dates per run (smaller batches allow checkpoint artifacts to be saved)"
+        required: false
+        default: "600"
+
+# Each follow-up batch is dispatched with the latest checkpoint run ID.
+# Serializing explicit batches avoids concurrent reads and stale checkpoint races.
+concurrency:
+  group: fluidq-price-gap-repair-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  repair-and-rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unit test legacy and UDiFF archive parsing
+        run: python -m unittest discover -s tests -p "test_price_gap_bhavcopy_parser.py"
+
+      - name: Download finalized dataset
+        uses: actions/download-artifact@v5
+        with:
+          name: fluidq-finalized-full-history-${{ inputs.base_run_id || '36875371038' }}
+          path: base_artifact
+          run-id: ${{ inputs.base_run_id || '36875371038' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore raw prices, membership and audit inputs
+        run: |
+          mkdir -p data/raw data/input data/processed/adjusted results/price_quality
+          cp base_artifact/data/raw/stage_a_prices.csv data/raw/stage_a_prices.csv
+          cp base_artifact/data/input/nifty500_membership.csv data/input/nifty500_membership.csv
+
+      - name: Restore prior repair checkpoint
+        if: ${{ inputs.checkpoint_run_id != '' }}
+        uses: actions/download-artifact@v5
+        continue-on-error: true
+        with:
+          name: fluidq-price-repair-checkpoint-${{ inputs.checkpoint_run_id }}
+          path: repair_checkpoint
+          run-id: ${{ inputs.checkpoint_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install restored checkpoint files
+        if: ${{ inputs.checkpoint_run_id != '' }}
+        run: |
+          if [ -d repair_checkpoint ]; then
+            cp -n repair_checkpoint/bhavcopy_repair_checkpoint.json results/price_quality/ 2>/dev/null || true
+            cp -n repair_checkpoint/bhavcopy_repair_additions.csv results/price_quality/ 2>/dev/null || true
+            cp -n repair_checkpoint/bhavcopy_repair_absences.csv results/price_quality/ 2>/dev/null || true
+          fi
+
+      - name: Backfill long internal gaps from official NSE daily bhavcopy
+        id: bhavcopy_repair
+        continue-on-error: true
+        run: |
+          set +e
+          python scripts/repair_price_gaps_bhavcopy.py \
+            --prices data/raw/stage_a_prices.csv \
+            --out data/raw/stage_a_prices_repaired.csv \
+            --no-trade-out data/input/verified_no_trade_dates.csv \
+            --exceptions-out data/input/unresolved_gap_exceptions.csv \
+            --report results/price_quality/bhavcopy_gap_repair.json \
+            --start 2014-01-01 --end 2026-08-31 \
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --workers 3 --min-bhavcopy-eq-rows 500 --max-dates "${{ inputs.batch_size || '600' }}" \
+            $([ -s results/price_quality/bhavcopy_repair_checkpoint.json ] && echo --resume)
+          rc=$?
+          if [ -s data/raw/stage_a_prices_repaired.csv ]; then
+            mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
+          fi
+          exit $rc
+
+      - name: Verify resumable checkpoint exists
+        id: checkpoint_state
+        if: always()
+        run: |
+          echo "Checkpoint directory:"
+          ls -lah results/price_quality/ || true
+          if [ -s results/price_quality/bhavcopy_repair_checkpoint.json ] && [ -f results/price_quality/bhavcopy_repair_additions.csv ] && [ -f results/price_quality/bhavcopy_repair_absences.csv ]; then
+            python -c "import json; p=json.load(open('results/price_quality/bhavcopy_repair_checkpoint.json')); print('Checkpoint status:', p.get('status')); print('Completed dates:', len(p.get('completed_date_values', [])), '/', p.get('total_dates'))"
+            complete=$(python -c "import json; p=json.load(open('results/price_quality/bhavcopy_repair_checkpoint.json')); print('true' if p.get('status') == 'complete' else 'false')")
+          else
+            complete=false
+          fi
+          echo "complete=$complete" >> "$GITHUB_OUTPUT"
+          test "$complete" = "true" || echo "Repair batch incomplete; preserving checkpoint for a follow-up run."
+
+      - name: Upload resumable repair checkpoint
+        if: always() && hashFiles('results/price_quality/bhavcopy_repair_checkpoint.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-repair-checkpoint-${{ github.run_id }}
+          path: results/price_quality/bhavcopy_repair_*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Audit raw price quality
+        id: raw_audit
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' }}
+        continue-on-error: true
+        run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
+
+      - name: Fetch NSE corporate actions
+        id: fetch_actions
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' }}
+        continue-on-error: true
+        run: python scripts/fetch_nse_corporate_actions.py --start 2014-01-01 --end 2026-08-31 --out data/input/nse_corporate_actions_2014_2026.csv
+
+      - name: Reconcile extreme returns against NSE actions
+        id: reconcile_actions
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.fetch_actions.outcome == 'success' && steps.raw_audit.outcome == 'success' }}
+        continue-on-error: true
+        run: python scripts/reconcile_extreme_returns.py --extremes results/price_quality/extreme_returns_raw.csv --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --out results/price_quality/extreme_return_reconciliation.csv
+
+      - name: Build split and bonus adjustment table
+        id: build_adjustments
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.fetch_actions.outcome == 'success' }}
+        continue-on-error: true
+        run: python scripts/build_price_adjustment_actions.py --actions data/input/nse_corporate_actions_2014_2026.csv --symbol-map data/input/verified_symbol_map.csv --supplemental data/input/verified_manual_corporate_actions.csv --out data/input/verified_price_adjustment_actions.csv
+
+      - name: Apply split and bonus adjustments
+        id: apply_adjustments
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.build_adjustments.outcome == 'success' }}
+        continue-on-error: true
+        run: python scripts/apply_verified_adjustments.py --prices data/raw/stage_a_prices.csv --actions data/input/verified_price_adjustment_actions.csv --symbol-map data/input/verified_symbol_map.csv --out data/processed/adjusted/prices_adjusted_split_bonus.csv
+
+      - name: Audit post-adjustment continuity
+        id: post_adjustment_audit
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.apply_adjustments.outcome == 'success' && steps.reconcile_actions.outcome == 'success' }}
+        continue-on-error: true
+        run: python scripts/audit_post_adjustment.py --extremes results/price_quality/extreme_returns_raw.csv --reconciliation results/price_quality/extreme_return_reconciliation.csv --adjusted data/processed/adjusted/prices_adjusted_split_bonus.csv --outdir results/price_quality/post_adjustment
+
+      - name: Inspect remaining corporate-action outliers
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' && steps.post_adjustment_audit.outcome == 'success' }}
+        continue-on-error: true
+        run: python scripts/inspect_extreme_events.py --events results/price_quality/post_adjustment/post_adjustment_extreme_events.csv --actions data/input/nse_corporate_actions_2014_2026.csv --top 120
+
+      - name: Run price-gap readiness gate
+        id: gap_gate
+        if: ${{ always() && steps.checkpoint_state.outputs.complete == 'true' }}
+        run: |
+          python scripts/audit_price_gap_readiness.py \
+            --prices data/raw/stage_a_prices.csv \
+            --repair-report results/price_quality/bhavcopy_gap_repair.json \
+            --verified-no-trade data/input/verified_no_trade_dates.csv \
+            --price-quality-summary results/price_quality/price_quality_summary.json \
+            --post-adjustment-summary results/price_quality/post_adjustment/post_adjustment_summary.json \
+            --symbol-map data/input/verified_symbol_map.csv \
+            --report results/price_quality/price_gap_readiness.json
+
+      - name: Dispatch next repair batch when checkpoint is incomplete
+        if: ${{ always() && steps.checkpoint_state.outputs.complete != 'true' && hashFiles('results/price_quality/bhavcopy_repair_checkpoint.json') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN_ID: ${{ github.run_id }}
+        run: |
+          payload=$(python -c 'import json,os; print(json.dumps({"ref":"v1.2-factor-attribution","inputs":{"base_run_id":"36875371038","checkpoint_run_id":os.environ["CHECKPOINT_RUN_ID"],"batch_size":"600"}}))')
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/rohitnanda016/quant_analysis/actions/workflows/fluidq-targeted-price-repair.yml/dispatches \
+            -d "$payload"
+
+      - name: Upload diagnostic artifact even when a gate fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-integrity-diagnostic-${{ github.run_id }}
+          path: |
+            data/raw/stage_a_prices.csv
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/unresolved_gap_exceptions.csv
+            data/input/nse_corporate_actions_2014_2026.csv
+            data/input/verified_price_adjustment_actions.csv
+            data/processed/adjusted/prices_adjusted_split_bonus.csv
+            results/price_quality/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish research-input artifact only after gap gate passes
+        if: ${{ steps.gap_gate.outcome == 'success' && steps.apply_adjustments.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-price-integrity-${{ github.run_id }}
+          path: |
+            data/raw/stage_a_prices.csv
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/verified_symbol_map.csv
+            data/input/verified_price_adjustment_actions.csv
+            data/input/verified_manual_corporate_actions.csv
+            data/processed/adjusted/prices_adjusted_split_bonus.csv
+            results/price_quality/
+          if-no-files-found: error
+          retention-days: 30

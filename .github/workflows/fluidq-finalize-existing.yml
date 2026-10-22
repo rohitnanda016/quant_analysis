@@ -6,7 +6,6 @@ on:
       base_run_id:
         description: "Completed full-history run whose artifact should be finalized"
         required: true
-        default: "36806513002"
 
 permissions:
   contents: read
@@ -15,7 +14,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,6 +22,9 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Unit test legacy and UDiFF archive parsing
+        run: python -m unittest discover -s tests -p "test_price_gap_bhavcopy_parser.py"
       - name: Download prior full-history artifact
         uses: actions/download-artifact@v5
         with:
@@ -43,6 +45,53 @@ jobs:
           x.to_csv("data/input/nifty500_membership_source.csv",index=False)
           PY
           python scripts/build_historical_membership.py --membership data/input/nifty500_membership_source.csv --out data/input/nifty500_membership.csv --start 2014-01-01 --end 2026-08-31
+      - name: Backfill long internal gaps from official daily NSE bhavcopy
+        id: bhavcopy_repair
+        continue-on-error: true
+        run: |
+          set +e
+          python scripts/repair_price_gaps_bhavcopy.py \
+            --prices data/raw/stage_a_prices.csv \
+            --out data/raw/stage_a_prices_repaired.csv \
+            --no-trade-out data/input/verified_no_trade_dates.csv \
+            --exceptions-out data/input/unresolved_gap_exceptions.csv \
+            --report results/latest/bhavcopy_gap_repair.json \
+            --start 2014-01-01 --end 2026-08-31 \
+            --min-gap-sessions 10 --sleep 0.15 --retries 3 --min-bhavcopy-eq-rows 500
+          rc=$?
+          if [ -s data/raw/stage_a_prices_repaired.csv ]; then
+            mv data/raw/stage_a_prices_repaired.csv data/raw/stage_a_prices.csv
+          fi
+          exit $rc
+      - name: Audit raw price quality
+        id: raw_audit
+        continue-on-error: true
+        run: python scripts/audit_price_quality.py --prices data/raw/stage_a_prices.csv --outdir results/price_quality
+      - name: Gate price-gap readiness
+        id: gap_gate
+        if: always()
+        run: |
+          python scripts/audit_price_gap_readiness.py \
+            --prices data/raw/stage_a_prices.csv \
+            --repair-report results/latest/bhavcopy_gap_repair.json \
+            --verified-no-trade data/input/verified_no_trade_dates.csv \
+            --price-quality-summary results/price_quality/price_quality_summary.json \
+            --symbol-map data/input/verified_symbol_map.csv \
+            --report results/latest/price_gap_readiness.json
+      - name: Upload diagnostics if readiness is blocked
+        if: ${{ always() && steps.gap_gate.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidq-finalization-diagnostic-${{ github.run_id }}
+          path: |
+            data/raw/stage_a_prices.csv
+            data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/unresolved_gap_exceptions.csv
+            results/price_quality/
+            results/latest/
+          if-no-files-found: warn
+          retention-days: 30
       - name: Build V6.2 identity
         run: python scripts/build_v6_2_identity.py --prices data/raw/stage_a_prices.csv --membership data/input/nifty500_membership.csv --symbol-map data/input/verified_symbol_map.csv
       - name: Audit coverage
@@ -59,6 +108,9 @@ jobs:
           path: |
             data/raw/
             data/input/nifty500_membership.csv
+            data/input/verified_no_trade_dates.csv
+            data/input/verified_symbol_map.csv
             data/processed/v6_2/
+            results/price_quality/
             results/latest/
           retention-days: 30
