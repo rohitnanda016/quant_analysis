@@ -1,11 +1,22 @@
 name: FLUID-Q V1 Backtest
 
 on:
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - ".github/workflows/fluidq-backtest.yml"
+      - "scripts/run_fluidq_backtest.py"
+      - "scripts/validate_fluidq_backtest.py"
+      - "scripts/audit_execution_turnover.py"
+      - "scripts/compare_fluidq_benchmark.py"
+      - "scripts/run_fluidq_subperiods.py"
+      - "requirements.txt"
   workflow_dispatch:
     inputs:
       integrity_run_id:
-        description: "Price-integrity artifact run ID that passed the price-gap gate"
-        required: true
+        description: "Eligible price-integrity artifact run ID, or auto to find the latest artifact that passes the current gate"
+        required: false
+        default: "auto"
 permissions:
   contents: read
   actions: read
@@ -21,13 +32,96 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Resolve latest eligible price-integrity artifact
+        id: integrity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REQUESTED_RUN_ID: ${{ inputs.integrity_run_id || 'auto' }}
+        run: |
+          python - <<'PY'
+          import io, json, os, zipfile
+          import requests
+
+          repo = os.environ["GH_REPO"]
+          token = os.environ["GH_TOKEN"]
+          requested = os.environ.get("REQUESTED_RUN_ID", "auto").strip()
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          api = f"https://api.github.com/repos/{repo}"
+
+          def valid_artifact(run_id, artifact):
+              if artifact.get("expired") or artifact.get("name") != f"fluidq-price-integrity-{run_id}":
+                  return False
+              response = requests.get(artifact["archive_download_url"], headers=headers, timeout=180)
+              response.raise_for_status()
+              with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                  names = set(z.namelist())
+                  required = [
+                      "data/input/verified_no_trade_dates.csv",
+                      "data/input/verified_symbol_map.csv",
+                      "data/input/nifty500_membership.csv",
+                      "data/processed/adjusted/prices_adjusted_split_bonus.csv",
+                      "results/price_quality/price_gap_readiness.json",
+                  ]
+                  def find_file(suffix):
+                      return next((n for n in names if n == suffix or n.endswith("/" + suffix)), None)
+                  paths = {p: find_file(p) for p in required}
+                  if any(v is None for v in paths.values()):
+                      return False
+                  readiness = json.loads(z.read(paths["results/price_quality/price_gap_readiness.json"]))
+                  if readiness.get("status") != "PASS_PRICE_GAPS" or readiness.get("price_gap_integrity") != "PASS":
+                      return False
+                  repair = readiness.get("repair", {})
+                  if int(repair.get("minimum_valid_bhavcopy_eq_rows", 0) or 0) < 500:
+                      return False
+                  if "NSEArchives.bhavcopy_raw" not in str(repair.get("archive_api", "")):
+                      return False
+                  return True
+
+          if requested and requested.lower() != "auto":
+              if not requested.isdigit():
+                  raise SystemExit("integrity_run_id must be a numeric run ID or 'auto'.")
+              run_id = int(requested)
+              r = requests.get(f"{api}/actions/runs/{run_id}/artifacts", headers=headers, timeout=30)
+              r.raise_for_status()
+              artifacts = r.json().get("artifacts", [])
+              artifact = next((a for a in artifacts if a.get("name") == f"fluidq-price-integrity-{run_id}"), None)
+              if artifact is None or not valid_artifact(run_id, artifact):
+                  raise SystemExit(f"Run {run_id} does not contain a current eligible price-integrity artifact. Refusing to backtest.")
+          else:
+              r = requests.get(
+                  f"{api}/actions/workflows/fluidq-price-integrity.yml/runs?status=success&per_page=50",
+                  headers=headers, timeout=30
+              )
+              r.raise_for_status()
+              runs = sorted(r.json().get("workflow_runs", []), key=lambda x: x.get("run_number", 0), reverse=True)
+              run_id = None
+              for run in runs:
+                  candidate_id = int(run["id"])
+                  ar = requests.get(f"{api}/actions/runs/{candidate_id}/artifacts", headers=headers, timeout=30)
+                  ar.raise_for_status()
+                  artifact = next((a for a in ar.json().get("artifacts", [])
+                                   if a.get("name") == f"fluidq-price-integrity-{candidate_id}" and not a.get("expired")), None)
+                  if artifact and valid_artifact(candidate_id, artifact):
+                      run_id = candidate_id
+                      break
+              if run_id is None:
+                  raise SystemExit("No unexpired price-integrity artifact passed the current readiness checks. Run the price-integrity workflow first; refusing to use a stale artifact.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"run_id={run_id}\n")
+          print(f"Selected eligible price-integrity artifact from run {run_id}")
+          PY
       - name: Download price-integrity artifact
         uses: actions/download-artifact@v5
         with:
-          name: fluidq-price-integrity-${{ inputs.integrity_run_id }}
+          name: fluidq-price-integrity-${{ steps.integrity.outputs.run_id }}
           path: integrity_artifact
-          run-id: ${{ inputs.integrity_run_id }}
-          github-token: ${{secrets.GITHUB_TOKEN}}
+          run-id: ${{ steps.integrity.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore backtest inputs
         run: |
           test -s integrity_artifact/data/input/verified_no_trade_dates.csv
@@ -36,7 +130,8 @@ jobs:
           python - <<'PY'
           import json
           p = "integrity_artifact/results/price_quality/price_gap_readiness.json"
-          r = json.load(open(p))
+          with open(p, encoding="utf-8") as f:
+              r = json.load(f)
           if r.get("status") != "PASS_PRICE_GAPS" or r.get("price_gap_integrity") != "PASS":
               raise SystemExit("Refusing to backtest: price-gap readiness gate did not pass")
           if int(r.get("repair", {}).get("minimum_valid_bhavcopy_eq_rows", 0) or 0) < 500:
@@ -47,7 +142,6 @@ jobs:
           PY
           mkdir -p data/processed/adjusted data/input results/backtest
           cp integrity_artifact/data/processed/adjusted/prices_adjusted_split_bonus.csv data/processed/adjusted/
-          mkdir -p data/input
           cp integrity_artifact/data/input/verified_no_trade_dates.csv data/input/verified_no_trade_dates.csv
           cp integrity_artifact/data/input/verified_symbol_map.csv data/input/verified_symbol_map.csv
           cp integrity_artifact/data/input/nifty500_membership.csv data/input/
@@ -81,6 +175,6 @@ jobs:
       - name: Upload backtest results
         uses: actions/upload-artifact@v4
         with:
-          name: fluidq-v1-backtest-${{github.run_id}}
+          name: fluidq-v1-backtest-${{ github.run_id }}
           path: results/backtest/
           retention-days: 30
