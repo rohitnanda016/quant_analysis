@@ -80,18 +80,27 @@ def canonicalize_symbol(series):
 
 
 def fill_verified_no_trade_prices(price_panel, verified_no_trade_mask):
-    """Fill only missing marks explicitly verified as no-trade sessions.
+    """Fill only verified no-trade marks that continue an unbroken price chain.
 
-    Unverified gaps remain NaN so a held-position return cannot be fabricated
-    by carrying the previous close forward.
+    An unresolved gap breaks the chain: a later verified no-trade date cannot
+    inherit a close from before that gap. Consecutive verified no-trade dates
+    may inherit the immediately preceding observed or safely filled mark.
     """
     if not price_panel.index.equals(verified_no_trade_mask.index) or not price_panel.columns.equals(verified_no_trade_mask.columns):
         raise ValueError("Verified no-trade mask must align exactly with the price panel.")
     verified_mask = verified_no_trade_mask.fillna(False).astype(bool)
-    fill_cells = price_panel.isna() & verified_mask
-    last_observed = price_panel.ffill()
-    filled = price_panel.mask(fill_cells, last_observed)
-    return filled, int(fill_cells.sum().sum())
+    filled = price_panel.copy()
+    fill_count = 0
+    for col_idx in range(filled.shape[1]):
+        for row_idx in range(1, filled.shape[0]):
+            if (
+                pd.isna(filled.iat[row_idx, col_idx])
+                and verified_mask.iat[row_idx, col_idx]
+                and pd.notna(filled.iat[row_idx - 1, col_idx])
+            ):
+                filled.iat[row_idx, col_idx] = filled.iat[row_idx - 1, col_idx]
+                fill_count += 1
+    return filled, fill_count
 
 
 def mask_unresolved_corporate_event_windows(frame, events):
