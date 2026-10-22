@@ -1,12 +1,15 @@
 import csv
 import tempfile
 import unittest
+
+import pandas as pd
 from pathlib import Path
 
 from scripts.approved_price_gap_exclusions import (
     load_scope_exclusions,
     match_scope_exclusions_to_archive_absences,
 )
+from scripts.audit_price_gap_readiness import unresolved_archive_absence_details
 
 
 class ApprovedPriceGapExclusionTests(unittest.TestCase):
@@ -88,6 +91,22 @@ class ApprovedPriceGapExclusionTests(unittest.TestCase):
             )
             with self.assertRaises(ValueError):
                 load_scope_exclusions(ledger)
+
+    def test_diagnostic_lists_only_unresolved_absences_not_scope_excluded_pairs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            absences = Path(directory) / "absences.csv"
+            self.write_csv(
+                absences,
+                ["date", "symbol", "series", "status"],
+                [
+                    ["2014-05-08", "DYNAMATECH", "EQ", "unresolved_archive_absence"],
+                    ["2020-01-02", "EXAMPLE", "EQ", "unresolved_archive_absence"],
+                    ["2020-01-03", "OTHER", "EQ", "observed"],
+                ],
+            )
+            waived = {(pd.Timestamp("2014-05-08"), "DYNAMATECH")}
+            details = unresolved_archive_absence_details(absences, waived)
+            self.assertEqual(details, [{"date": "2020-01-02", "symbol": "EXAMPLE"}])
 
 
 if __name__ == "__main__":

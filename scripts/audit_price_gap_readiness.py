@@ -41,6 +41,35 @@ def accounting_summary(target_pairs, rows_added, verified_no_trade_pairs, alias_
             "mismatch": sum(buckets.values()) != int(target_pairs)}
 
 
+def unresolved_archive_absence_details(path, scope_matched_pairs):
+    """Return exact unresolved archive-absence pairs not covered by valid scope waivers.
+
+    This is diagnostic only: it never changes readiness decisions or converts an
+    absence into a price/no-trade observation.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return []
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if not {"date", "symbol", "status"}.issubset(frame.columns):
+        return []
+    details = set()
+    for _, row in frame.iterrows():
+        if row["status"].strip().lower() != "unresolved_archive_absence":
+            continue
+        date = pd.to_datetime(row["date"], errors="coerce")
+        symbol = str(row["symbol"]).strip().upper()
+        if pd.isna(date) or not symbol or symbol.lower() in {"nan", "none", "<na>"}:
+            continue
+        pair = (pd.Timestamp(date).normalize(), symbol)
+        if pair not in scope_matched_pairs:
+            details.add(pair)
+    return [
+        {"date": date.date().isoformat(), "symbol": symbol}
+        for date, symbol in sorted(details)
+    ]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
@@ -269,6 +298,9 @@ def main():
             "Scoped exclusions matched more rows than the repair report's unresolved-absence count; refusing scope waiver."
         )
         blocking_archive_absence_pairs = archive_absence_pairs
+    remaining_archive_absence_details = unresolved_archive_absence_details(
+        args.archive_absence_report, scope_matched_pairs
+    )
     if blocking_archive_absence_pairs > 0:
         gap_blockers.append(
             f"{blocking_archive_absence_pairs} symbol/date pair(s) lack an EQ/BE/BZ price observation "
@@ -328,6 +360,7 @@ def main():
             "archive_absence_review_pairs": archive_absence_pairs,
             "scope_excluded_archive_absence_pairs": len(scope_matched_pairs),
             "blocking_archive_absence_pairs": blocking_archive_absence_pairs,
+            "remaining_archive_absence_details": remaining_archive_absence_details,
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
             "accounted_target_pairs": accounted,
             "accounting_buckets": accounting["buckets"],
@@ -353,6 +386,7 @@ def main():
         "remaining_long_internal_gap_spans": int(len(long_gap_spans)),
         "remaining_unverified_gap_pairs": int(len(missing_unverified)),
         "sample_unverified_gap_pairs": missing_unverified[:100],
+        "remaining_archive_absence_details": remaining_archive_absence_details,
         "raw_price_quality_summary": price_summary,
         "post_adjustment_summary": post_summary,
         "blockers": gap_blockers,
@@ -376,6 +410,8 @@ def main():
         "accounted_target_pairs": accounted,
         "fetch_error_dates": fetch_errors,
         "remaining_unverified_gap_pairs": len(missing_unverified),
+        "remaining_archive_absence_details": remaining_archive_absence_details,
+        "sample_unverified_gap_pairs": missing_unverified[:100],
         "blockers": gap_blockers,
     }, indent=2))
     if gap_blockers:
