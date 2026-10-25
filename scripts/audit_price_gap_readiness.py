@@ -70,6 +70,75 @@ def unresolved_archive_absence_details(path, scope_matched_pairs):
     ]
 
 
+
+def load_exchange_status_evidence(path):
+    """Load official exchange-status evidence; never interpret it as a price/no-trade row."""
+    path = Path(path)
+    if not path.is_file():
+        return []
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    required = {"symbol", "date_from", "date_to", "status", "verification_source", "evidence_reference"}
+    if not required.issubset(frame.columns):
+        raise ValueError(f"Exchange-status evidence missing columns: {sorted(required - set(frame.columns))}")
+    allowed = {"nse_dealings_withdrawn", "nse_suspended", "nse_delisted"}
+    rows = []
+    for _, row in frame.iterrows():
+        symbol = str(row["symbol"]).strip().upper()
+        status = str(row["status"]).strip().lower()
+        source = str(row["verification_source"]).strip()
+        reference = str(row["evidence_reference"]).strip()
+        start = pd.to_datetime(row["date_from"], errors="coerce")
+        end_raw = str(row["date_to"]).strip()
+        end = pd.to_datetime(end_raw, errors="coerce") if end_raw else pd.NaT
+        if (not symbol or status not in allowed or pd.isna(start)
+                or (end_raw and pd.isna(end)) or (not pd.isna(end) and end < start)
+                or not source or not reference):
+            raise ValueError("Invalid exchange-status evidence row; refusing to apply it.")
+        rows.append({
+            "symbol": symbol,
+            "date_from": pd.Timestamp(start).normalize(),
+            "date_to": None if pd.isna(end) else pd.Timestamp(end).normalize(),
+            "status": status,
+            "verification_source": source,
+            "evidence_reference": reference,
+        })
+    return rows
+
+
+def exchange_status_confirmed(date, symbol, status_rows):
+    """True only when a dated, sourced official status record covers this symbol/session."""
+    date = pd.Timestamp(date).normalize()
+    symbol = str(symbol).strip().upper()
+    return any(
+        row["symbol"] == symbol
+        and row["date_from"] <= date
+        and (row["date_to"] is None or date <= row["date_to"])
+        for row in status_rows
+    )
+
+
+def status_confirmed_archive_absence_pairs(path, status_rows, scope_matched_pairs):
+    """Return archive-absence pairs explained by official exchange status, not by prices."""
+    path = Path(path)
+    if not path.is_file():
+        return set()
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if not {"date", "symbol", "status"}.issubset(frame.columns):
+        return set()
+    confirmed = set()
+    for _, row in frame.iterrows():
+        if row["status"].strip().lower() != "unresolved_archive_absence":
+            continue
+        date = pd.to_datetime(row["date"], errors="coerce")
+        symbol = str(row["symbol"]).strip().upper()
+        if pd.isna(date) or not symbol:
+            continue
+        pair = (pd.Timestamp(date).normalize(), symbol)
+        if pair not in scope_matched_pairs and exchange_status_confirmed(pair[0], symbol, status_rows):
+            confirmed.add(pair)
+    return confirmed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", required=True)
@@ -81,6 +150,7 @@ def main():
     ap.add_argument("--min-gap-sessions", type=int, default=10)
     ap.add_argument("--symbol-map", default="data/input/verified_symbol_map.csv")
     ap.add_argument("--symbol-map-supplement", default="data/reference/nse_historical_symbol_changes.csv")
+    ap.add_argument("--exchange-status-evidence", default="data/reference/verified_exchange_status.csv")
     ap.add_argument("--membership", default="data/input/nifty500_membership.csv")
     ap.add_argument("--membership-warmup-sessions", type=int, default=252)
     ap.add_argument(
@@ -169,6 +239,14 @@ def main():
     except (OSError, ValueError, pd.errors.ParserError) as exc:
         scope_exclusion_issues.append(str(exc))
 
+    try:
+        exchange_status_rows = load_exchange_status_evidence(args.exchange_status_evidence)
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        raise SystemExit(f"Invalid exchange-status evidence: {exc}")
+    status_confirmed_absences = status_confirmed_archive_absence_pairs(
+        args.archive_absence_report, exchange_status_rows, scope_matched_pairs
+    )
+
     rename_rows = load_symbol_rename_rows(args.symbol_map, args.symbol_map_supplement)
     aliases = terminal_symbol_aliases(rename_rows)
     def terminal_alias(value):
@@ -203,6 +281,7 @@ def main():
             relevant_indices = [
                 i for i in range(left + 1, right)
                 if in_membership_research_window(symbol, i, membership_windows)
+                and not exchange_status_confirmed(calendar[i], symbol, exchange_status_rows)
             ]
             excluded_gap_pairs_outside_membership_window += gap - len(relevant_indices)
             if not relevant_indices:
@@ -291,7 +370,7 @@ def main():
     if unresolved_fetch_pairs > 0:
         gap_blockers.append(f"{unresolved_fetch_pairs} candidate symbol/date pair(s) remain unresolved due to fetch errors.")
     blocking_archive_absence_pairs = max(
-        0, archive_absence_pairs - len(scope_matched_pairs)
+        0, archive_absence_pairs - len(scope_matched_pairs) - len(status_confirmed_absences)
     )
     if len(scope_matched_pairs) > archive_absence_pairs:
         gap_blockers.append(
@@ -299,12 +378,12 @@ def main():
         )
         blocking_archive_absence_pairs = archive_absence_pairs
     remaining_archive_absence_details = unresolved_archive_absence_details(
-        args.archive_absence_report, scope_matched_pairs
+        args.archive_absence_report, scope_matched_pairs | status_confirmed_absences
     )
     if blocking_archive_absence_pairs > 0:
         gap_blockers.append(
             f"{blocking_archive_absence_pairs} symbol/date pair(s) lack an EQ/BE/BZ price observation "
-            "and independent evidence of listing/suspension status after approved scope exclusions; "
+            "and independent evidence of listing/suspension status after approved scope and exchange-status evidence; "
             "review them before any carry-forward."
         )
     if missing_unverified:
@@ -359,6 +438,10 @@ def main():
             "verified_no_trade_pairs": repair.get("verified_no_trade_pairs"),
             "archive_absence_review_pairs": archive_absence_pairs,
             "scope_excluded_archive_absence_pairs": len(scope_matched_pairs),
+            "official_status_confirmed_archive_absence_pairs": [
+                {"date": pair[0].date().isoformat(), "symbol": pair[1]}
+                for pair in sorted(status_confirmed_absences)
+            ],
             "blocking_archive_absence_pairs": blocking_archive_absence_pairs,
             "remaining_archive_absence_details": remaining_archive_absence_details,
             "already_present_alias_matches": repair.get("already_present_alias_matches"),
@@ -367,6 +450,15 @@ def main():
             "accounting_mismatch": accounting["mismatch"],
         },
         "approved_no_trade_ledger_evidence_issues": ledger_evidence_issues,
+        "exchange_status_evidence": {
+            "ledger_path": str(args.exchange_status_evidence),
+            "declared_count": len(exchange_status_rows),
+            "status_confirmed_archive_absence_pairs": [
+                {"date": pair[0].date().isoformat(), "symbol": pair[1]}
+                for pair in sorted(status_confirmed_absences)
+            ],
+            "policy": "Official exchange-status evidence explains why a price is not expected; it is not a price observation and never authorizes carry-forward.",
+        },
         "scope_exclusions": {
             "ledger_path": str(args.scope_exclusions),
             "archive_absence_report_path": str(args.archive_absence_report),

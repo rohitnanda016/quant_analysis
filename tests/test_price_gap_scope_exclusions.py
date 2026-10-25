@@ -9,7 +9,12 @@ from scripts.approved_price_gap_exclusions import (
     load_scope_exclusions,
     match_scope_exclusions_to_archive_absences,
 )
-from scripts.audit_price_gap_readiness import unresolved_archive_absence_details
+from scripts.audit_price_gap_readiness import (
+    unresolved_archive_absence_details,
+    load_exchange_status_evidence,
+    exchange_status_confirmed,
+    status_confirmed_archive_absence_pairs,
+)
 
 
 class ApprovedPriceGapExclusionTests(unittest.TestCase):
@@ -107,6 +112,47 @@ class ApprovedPriceGapExclusionTests(unittest.TestCase):
             waived = {(pd.Timestamp("2014-05-08"), "DYNAMATECH")}
             details = unresolved_archive_absence_details(absences, waived)
             self.assertEqual(details, [{"date": "2020-01-02", "symbol": "EXAMPLE"}])
+
+    def test_official_withdrawal_status_is_not_no_trade_or_price_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger = root / "status.csv"
+            absences = root / "absences.csv"
+            self.write_csv(
+                ledger,
+                ["symbol", "date_from", "date_to", "status", "verification_source", "evidence_reference"],
+                [["KIRLFER", "2023-10-26", "", "nse_dealings_withdrawn",
+                  "NSE Circular CML58560", "https://nsearchives.nseindia.com/content/circulars/CML58560.pdf"]],
+            )
+            self.write_csv(
+                absences,
+                ["date", "symbol", "series", "status"],
+                [
+                    ["2023-10-26", "KIRLFER", "EQ", "unresolved_archive_absence"],
+                    ["2023-10-27", "KIRLFER", "EQ", "unresolved_archive_absence"],
+                    ["2023-10-25", "KIRLFER", "EQ", "observed"],
+                ],
+            )
+            rows = load_exchange_status_evidence(ledger)
+            self.assertTrue(exchange_status_confirmed("2023-10-26", "KIRLFER", rows))
+            self.assertFalse(exchange_status_confirmed("2023-10-25", "KIRLFER", rows))
+            confirmed = status_confirmed_archive_absence_pairs(absences, rows, set())
+            self.assertEqual(
+                confirmed,
+                {(pd.Timestamp("2023-10-26"), "KIRLFER"),
+                 (pd.Timestamp("2023-10-27"), "KIRLFER")},
+            )
+
+    def test_invalid_exchange_status_evidence_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "status.csv"
+            self.write_csv(
+                ledger,
+                ["symbol", "date_from", "date_to", "status", "verification_source", "evidence_reference"],
+                [["KIRLFER", "2023-10-26", "", "verified_no_trade", "NSE", "Circular"]],
+            )
+            with self.assertRaises(ValueError):
+                load_exchange_status_evidence(ledger)
 
 
 if __name__ == "__main__":
