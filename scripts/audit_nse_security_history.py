@@ -13,7 +13,7 @@ import io
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -51,16 +51,22 @@ def main() -> int:
 
     records = []
     for i, target in enumerate(TARGETS):
+        target_day = datetime.strptime(target["date"], "%d-%m-%Y").date()
+        # The previous exact-date queries returned empty CSVs even for dates
+        # surrounded by known trading sessions. Probe a wider range to validate
+        # the endpoint response and capture neighboring sessions for review.
         params = {
             "symbol": target["symbol"],
-            "from": target["date"],
-            "to": target["date"],
+            "from": (target_day - timedelta(days=7)).strftime("%d-%m-%Y"),
+            "to": (target_day + timedelta(days=7)).strftime("%d-%m-%Y"),
             "series": target["series"],
             "type": "priceVolumeDeliverable",
             "csv": "true",
         }
         item = {
             **target,
+            "query_kind": "seven-calendar-day-window-each-side",
+            "query_window": {"from": params["from"], "to": params["to"]},
             "endpoint": ENDPOINT,
             "params": params,
             "captured_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -108,14 +114,14 @@ def main() -> int:
         "source": ENDPOINT,
         "landing_page": LANDING,
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
-        "interpretation_rule": "Only a returned, validated official price row may be reviewed as price evidence. Empty, blocked, malformed, or missing rows remain unresolved.",
+        "interpretation_rule": "This run queries a ±7-calendar-day window around each target. Returned neighboring rows help validate endpoint behavior but are not approvals for target dates. Only a returned, validated official price row for the exact target date may be reviewed as price evidence. Empty, blocked, malformed, or missing rows remain unresolved.",
         "targets": records,
     }
     (out / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps({
         "report": str(out / "report.json"),
         "targets": [
-            {k: item.get(k) for k in ("symbol", "date", "http_status", "content_type", "body_bytes", "parsed_row_count", "request_error", "parse_error")}
+            {k: item.get(k) for k in ("symbol", "date", "query_kind", "query_window", "http_status", "content_type", "body_bytes", "parsed_row_count", "request_error", "parse_error")}
             for item in records
         ],
         "interpretation": report["interpretation_rule"],
