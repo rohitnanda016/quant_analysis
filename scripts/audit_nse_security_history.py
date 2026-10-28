@@ -95,6 +95,29 @@ def main() -> int:
                     rows = list(csv.DictReader(io.StringIO(response.text)))
                     item["parsed_row_count"] = len(rows)
                     item["parsed_rows"] = rows
+                    # Explicitly isolate rows whose official date equals the target.
+                    # This is evidence extraction only; it does not approve a price.
+                    target_date_rows = []
+                    for row in rows:
+                        date_value = None
+                        for key, value in row.items():
+                            normalized_key = str(key).replace("\\ufeff", "").strip().strip('"').lower()
+                            if normalized_key == "date":
+                                date_value = str(value).strip()
+                                break
+                        if not date_value:
+                            continue
+                        parsed_date = None
+                        for date_format in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d"):
+                            try:
+                                parsed_date = datetime.strptime(date_value, date_format).date()
+                                break
+                            except ValueError:
+                                continue
+                        if parsed_date == target_day:
+                            target_date_rows.append(row)
+                    item["target_date_rows"] = target_date_rows
+                    item["exact_target_date_row_count"] = len(target_date_rows)
                 except Exception as exc:
                     item["parse_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
             else:
