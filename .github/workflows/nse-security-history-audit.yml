@@ -35,6 +35,29 @@ jobs:
       - name: Query exact-date NSE security history
         run: python scripts/audit_nse_security_history.py
 
+      - name: Print official rows for manual review
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("results/nse_security_history_audit/report.json")
+          if not p.exists():
+              print("No audit report available")
+              raise SystemExit(0)
+          report = json.loads(p.read_text(encoding="utf-8"))
+          for item in report.get("targets", []):
+              print(json.dumps({
+                  "target_symbol": item.get("symbol"),
+                  "target_date": item.get("date"),
+                  "query_window": item.get("query_window"),
+                  "parsed_rows": item.get("parsed_rows", []),
+                  "parsed_row_count": item.get("parsed_row_count"),
+                  "request_error": item.get("request_error"),
+                  "parse_error": item.get("parse_error"),
+              }, ensure_ascii=False))
+          PY
+
       - name: Upload raw responses and audit report
         if: always()
         uses: actions/upload-artifact@v4
