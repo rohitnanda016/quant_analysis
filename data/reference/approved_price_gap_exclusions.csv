@@ -1,2 +1,5 @@
 date,symbol,status,reason,approval_reference
 2014-05-08,DYNAMATECH,excluded_unresolved,"User explicitly waived further retrieval for the current iteration; no price or no-trade status is inferred.","Issue #4 scope decision dated 2026-10-20"
+2024-10-28,MAHSCOOTER,excluded_unresolved,"User accepted this unresolved archive absence as missing for the current research iteration; no price or no-trade status is inferred.","User scope decision dated 2026-10-28"
+2025-10-29,MAHSCOOTER,excluded_unresolved,"User accepted this unresolved archive absence as missing for the current research iteration; no price or no-trade status is inferred.","User scope decision dated 2026-10-28"
+2025-10-30,MAHSCOOTER,excluded_unresolved,"User accepted this unresolved archive absence as missing for the current research iteration; no price or no-trade status is inferred.","User scope decision dated 2026-10-28"
