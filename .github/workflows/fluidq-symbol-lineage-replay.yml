@@ -127,8 +127,8 @@ jobs:
               status = checkpoint.get("status")
               if status == "complete":
                   with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                      output.write(f"run_id={run_id}\\n")
-                      output.write(f"checkpoint_status={status}\\n")
+                      output.write(f"run_id={run_id}\n")
+                      output.write(f"checkpoint_status={status}\n")
                   print(f"Using latest complete checkpoint from run {run_id}; "
                         f"{checkpoint.get('completed_dates')} / {checkpoint.get('total_dates')} dates completed; "
                         f"{checkpoint.get('unresolved_absence_pairs')} absences remain for explicit audit.",
