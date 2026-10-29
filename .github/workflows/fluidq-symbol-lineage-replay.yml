@@ -59,6 +59,7 @@ jobs:
           api = f"https://api.github.com/repos/{repo}"
           deadline = time.time() + 150 * 60
           last_seen = None
+          idle_polls = 0
 
           while time.time() < deadline:
               # Query the repair workflow directly. The global actions/runs
@@ -126,13 +127,25 @@ jobs:
                   print(f"Repair run {run_id} checkpoint status is {status}; not eligible yet.", flush=True)
 
               if active_runs:
+                  idle_polls = 0
                   print(f"{len(active_runs)} repair run(s) still active; waiting for a checkpoint.", flush=True)
                   time.sleep(30)
                   continue
-              # No complete checkpoint is currently visible. Keep polling briefly
-              # for artifact propagation / a follow-up batch, then fail with context
-              # rather than treating a missing artifact as a successful replay.
-              print("No complete checkpoint found in recent completed repair runs; waiting for a follow-up run or artifact propagation.", flush=True)
+              # A dispatch-only repair chain should start another batch when the
+              # previous checkpoint is incomplete. Do not burn the entire 150-minute
+              # job timeout if no run is active and no complete artifact is discoverable.
+              idle_polls += 1
+              if idle_polls >= 10:
+                  recent = ", ".join(
+                      f"#{r.get('run_number')}:{r.get('conclusion') or r.get('status')}"
+                      for r in runs[:5]
+                  )
+                  raise RuntimeError(
+                      "No active repair run and no complete checkpoint artifact after 5 minutes. "
+                      f"Recent repair runs: {recent}. Re-dispatch the targeted repair workflow "
+                      "or restore its checkpoint artifact; refusing to run the replay without it."
+                  )
+              print("No complete checkpoint found and no active repair run; waiting briefly for artifact propagation or next batch.", flush=True)
               time.sleep(30)
 
           raise TimeoutError("Repair chain did not publish a complete checkpoint within 150 minutes.")
