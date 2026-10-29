@@ -1,8 +1,14 @@
 import argparse, json, re, time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 import requests
+
+try:
+    from scripts.nse_action_payload_archive import archive_http_response, write_manifest
+except ModuleNotFoundError:
+    from nse_action_payload_archive import archive_http_response, write_manifest
 
 API_HOSTS = [
     "https://www.nseindia.com",
@@ -75,7 +81,7 @@ def fetch_session():
     raise RuntimeError(f"Could not establish NSE API session: {last_error}")
 
 
-def get_range(s, start, end):
+def get_range(s, start, end, raw_archive_dir, chunk_index, raw_records):
     params = {
         "index": "equities",
         "from_date": start.strftime("%d-%m-%Y"),
@@ -85,16 +91,35 @@ def get_range(s, start, end):
     last_error = None
     for attempt in range(7):
         try:
+            requested_at = datetime.now(timezone.utc).isoformat()
             r = s.get(
                 "https://www.nseindia.com" + API_PATH,
                 params=params,
                 timeout=90,
             )
+            # Persist the response body before parsing or normalizing it.
+            record = archive_http_response(
+                r, raw_archive_dir, chunk_index,
+                start.date().isoformat(), end.date().isoformat(),
+                attempt + 1, requested_at_utc=requested_at,
+            )
+            raw_records.append(record)
+            write_manifest(
+                raw_archive_dir, raw_records, retrieval_complete=False,
+                source="https://www.nseindia.com" + API_PATH,
+                requested_start=start.date().isoformat(),
+                requested_end=end.date().isoformat(),
+            )
 
             if r.status_code == 200:
                 obj = r.json()
                 data = obj.get("data", []) if isinstance(obj, dict) else obj
-                return pd.DataFrame(data if isinstance(data, list) else [])
+                if not isinstance(data, list):
+                    raise RuntimeError(
+                        "NSE corporate-actions response JSON lacks a list payload "
+                        f"(chunk={chunk_index}, attempt={attempt + 1})"
+                    )
+                return pd.DataFrame(data)
 
             last_error = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
         except Exception as exc:
@@ -126,23 +151,40 @@ p = argparse.ArgumentParser()
 p.add_argument("--start", required=True)
 p.add_argument("--end", required=True)
 p.add_argument("--out", required=True)
+p.add_argument(
+    "--raw-archive-dir",
+    default="results/price_quality/nse_corporate_actions_raw",
+    help="Directory for unparsed NSE response bodies, per-response metadata and manifest",
+)
 a = p.parse_args()
 
 start, end = pd.Timestamp(a.start), pd.Timestamp(a.end)
 s = fetch_session()
+raw_archive_dir = Path(a.raw_archive_dir)
+raw_archive_dir.mkdir(parents=True, exist_ok=True)
+raw_records = []
 
 frames = []
 cur = start
+chunk_index = 0
 
 while cur <= end:
     nxt = min(cur + pd.Timedelta(days=89), end)
-    df = get_range(s, cur, nxt)
+    chunk_index += 1
+    df = get_range(s, cur, nxt, raw_archive_dir, chunk_index, raw_records)
 
     if not df.empty:
         frames.append(df)
 
     cur = nxt + pd.Timedelta(days=1)
     time.sleep(0.5)
+
+manifest_path = write_manifest(
+    raw_archive_dir, raw_records, retrieval_complete=True,
+    source="https://www.nseindia.com" + API_PATH,
+    requested_start=start.date().isoformat(),
+    requested_end=end.date().isoformat(),
+)
 
 out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
@@ -174,6 +216,10 @@ summary = {
     "source": "https://www.nseindia.com" + API_PATH,
     "chunks": int(((end - start).days // 90) + 1),
     "columns": list(out.columns),
+    "raw_payload_archive_dir": str(raw_archive_dir),
+    "raw_payload_manifest": str(manifest_path),
+    "raw_payload_attempts_archived": int(len(raw_records)),
+    "raw_payload_hash_scope": "response.content bytes exposed by requests before JSON parsing/normalization; not compressed wire bytes",
 }
 
 Path(a.out + ".summary.json").write_text(json.dumps(summary, indent=2))

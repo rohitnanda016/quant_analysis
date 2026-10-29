@@ -1,0 +1,69 @@
+name: NSE Security History Evidence Audit
+
+on:
+  push:
+    branches:
+      - v1.2-factor-attribution
+    paths:
+      - "scripts/audit_nse_security_history.py"
+      - ".github/workflows/nse-security-history-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nse-security-history-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  retrieve-official-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install retrieval dependency
+        run: python -m pip install --disable-pip-version-check requests
+
+      - name: Query exact-date NSE security history
+        run: python scripts/audit_nse_security_history.py
+
+      - name: Print official rows for manual review
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("results/nse_security_history_audit/report.json")
+          if not p.exists():
+              print("No audit report available")
+              raise SystemExit(0)
+          report = json.loads(p.read_text(encoding="utf-8"))
+          for item in report.get("targets", []):
+              print(json.dumps({
+                  "target_symbol": item.get("symbol"),
+                  "target_date": item.get("date"),
+                  "query_window": item.get("query_window"),
+                  "exact_target_date_row_count": item.get("exact_target_date_row_count"),
+                  "target_date_rows": item.get("target_date_rows", []),
+                  "parsed_row_count": item.get("parsed_row_count"),
+                  "request_error": item.get("request_error"),
+                  "parse_error": item.get("parse_error"),
+              }, ensure_ascii=False))
+          PY
+
+      - name: Upload raw responses and audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-security-history-audit-${{ github.run_id }}
+          path: results/nse_security_history_audit/
+          if-no-files-found: warn
+          retention-days: 30

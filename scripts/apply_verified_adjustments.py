@@ -3,11 +3,17 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+try:
+    from scripts.symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+except ModuleNotFoundError:
+    from symbol_lineage import load_symbol_rename_rows, terminal_symbol_aliases
+
 p=argparse.ArgumentParser()
 p.add_argument("--prices",required=True)
 p.add_argument("--actions",required=True)
 p.add_argument("--out",required=True)
 p.add_argument("--symbol-map",default="")
+p.add_argument("--symbol-map-supplement",default="data/reference/nse_historical_symbol_changes.csv")
 a=p.parse_args()
 
 actions=pd.read_csv(a.actions)
@@ -18,15 +24,13 @@ actions=actions.dropna(subset=["symbol","ex_date","factor"])
 if (actions.factor<=0).any():
     raise SystemExit("Invalid adjustment factor generated")
 
-aliases={}
-if a.symbol_map and Path(a.symbol_map).exists():
-    sm=pd.read_csv(a.symbol_map)
-    for _,r in sm.iterrows():
-        old=str(r.get("old_symbol","")).strip().upper()
-        new=str(r.get("new_symbol","")).strip().upper()
-        if old and new and old!="NAN" and new!="NAN":
-            aliases[old]=new
-            aliases[new]=new
+base_symbol_map = a.symbol_map if a.symbol_map and Path(a.symbol_map).exists() else None
+if base_symbol_map or Path(a.symbol_map_supplement).exists():
+    aliases = terminal_symbol_aliases(
+        load_symbol_rename_rows(base_symbol_map, a.symbol_map_supplement)
+    )
+else:
+    aliases = {}
 
 actions=actions.sort_values(["symbol","ex_date"])
 events={s:(g.ex_date.to_numpy(),g.factor.to_numpy()) for s,g in actions.groupby("symbol")}
@@ -37,10 +41,27 @@ price_cols=["open","high","low","close","vwap"]
 
 for ch in pd.read_csv(a.prices,chunksize=250000,low_memory=False):
     total_rows += len(ch)
-    ch["raw_symbol"]=ch["symbol"].astype(str).str.upper().str.strip()
-    ch["canonical_symbol"]=ch["raw_symbol"].map(lambda s: aliases.get(s,s))
+    ch["raw_symbol"] = ch["symbol"].astype(str).str.upper().str.strip()
+
+    # Match the identity precedence used by audit_price_quality.py. Repaired
+    # archive rows can carry a historical source ticker in symbol while
+    # canonical_symbol or requested_symbol identifies the strategy security.
+    # Ignoring those fields makes valid rows disappear from the event join.
+    def usable_symbol_column(name):
+        if name not in ch.columns:
+            return pd.Series("", index=ch.index, dtype="object")
+        values = ch[name].fillna("").astype(str).str.strip().str.upper()
+        return values.mask(values.str.lower().isin(["", "nan", "none", "<na>"]), "")
+
+    canonical = usable_symbol_column("canonical_symbol")
+    requested = usable_symbol_column("requested_symbol")
+    canonical = canonical.where(canonical.ne(""), requested)
+    canonical = canonical.where(canonical.ne(""), ch["raw_symbol"])
+    ch["canonical_symbol"] = canonical.map(lambda s: aliases.get(s, s))
     mapped_rows += int((ch["canonical_symbol"] != ch["raw_symbol"]).sum())
-    ch["date"]=pd.to_datetime(ch["date"],errors="coerce")
+    # Match the mixed-format parser used by the raw quality audit; strict inference
+    # can coerce valid historical dates to NaT when a chunk contains mixed formats.
+    ch["date"] = pd.to_datetime(ch["date"], errors="coerce", format="mixed")
     if "turnover_₹" not in ch.columns and "turnover ₹" in ch.columns:
         ch["turnover_₹"]=ch["turnover ₹"]
     for c in price_cols+["prev_close","volume","turnover_₹"]:
