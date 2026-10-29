@@ -70,7 +70,7 @@ def main():
         "benchmark_return_basis":"total_return_index",
         "benchmark_snapshot_url":TRI_SNAPSHOT_URL,
         "benchmark_snapshot_coverage":"2019-12-02 through 2026-09-25",
-        "comparison_window_note":"Because the auditable daily TRI snapshot begins in late 2019, benchmark attribution is calculated only over the common portfolio/benchmark window from 2020 onward; the standalone FLUID-Q backtest remains 2014-11-03 through 2026-08-31.",
+        "comparison_window_note":"Because the auditable daily TRI snapshot begins in late 2019, standalone strategy and TRI statistics are shown only over their common overlap. Active attribution and CAGR deltas are intentionally blocked because the return bases differ; the standalone FLUID-Q backtest remains 2014-11-03 through 2026-08-31.",
         "overlap_start":str(m.date.min().date()),
         "overlap_end":str(m.date.max().date()),
         "overlap_days":int(len(m)),
