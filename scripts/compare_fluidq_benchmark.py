@@ -53,14 +53,21 @@ def main():
     if missing:
         raise ValueError(f"Missing regime exposure for {missing} portfolio rows")
 
-    m["matched_bench_ret"]=m.ret_nifty500tri*m.exposure
-    matched=stats(m.matched_bench_ret)
-
-    active=(1+m.ret_fluidq)/(1+m.ret_nifty500tri)-1
-    active_stats=stats(active)
+    # The strategy currently uses split/bonus-adjusted price returns excluding
+    # dividends, while this benchmark is TRI. Keep standalone metrics visible,
+    # but do not calculate active returns or CAGR deltas across incompatible bases.
+    m["matched_bench_ret"]=np.nan
+    matched=None
+    active_stats=None
+    comparison_status="BLOCKED_RETURN_BASIS_MISMATCH"
 
     outd={
         "benchmark_source":"Independent snapshot of Nifty 500 TRI sourced from Nifty Indices",
+        "comparison_status":comparison_status,
+        "comparison_allowed":False,
+        "comparison_blocker":"FLUID-Q series is split/bonus-adjusted price return excluding dividends; benchmark is total-return index. Do not compare active returns or CAGR deltas until dividend completeness and reinvestment policy are independently verified, or use a price-index benchmark.",
+        "fluidq_return_basis":"split_bonus_adjusted_price_returns_ex_dividends",
+        "benchmark_return_basis":"total_return_index",
         "benchmark_snapshot_url":TRI_SNAPSHOT_URL,
         "benchmark_snapshot_coverage":"2019-12-02 through 2026-09-25",
         "comparison_window_note":"Because the auditable daily TRI snapshot begins in late 2019, benchmark attribution is calculated only over the common portfolio/benchmark window from 2020 onward; the standalone FLUID-Q backtest remains 2014-11-03 through 2026-08-31.",
@@ -71,8 +78,8 @@ def main():
         "nifty500_tri":bench,
         "regime_matched_nifty500":matched,
         "daily_active_return_stats":active_stats,
-        "fluidq_minus_full_benchmark_cagr":base["cagr"]-bench["cagr"],
-        "fluidq_minus_regime_matched_cagr":base["cagr"]-matched["cagr"]
+        "fluidq_minus_full_benchmark_cagr":None,
+        "fluidq_minus_regime_matched_cagr":None
     }
     (out/"benchmark_comparison.json").write_text(json.dumps(outd,indent=2))
     m.to_csv(out/"benchmark_daily_comparison.csv",index=False)
