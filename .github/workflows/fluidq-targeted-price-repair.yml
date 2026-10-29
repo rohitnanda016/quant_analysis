@@ -3,6 +3,11 @@ name: FLUID-Q Targeted Price Gap Repair
 # This multi-hour archive repair is intentionally dispatch-only. A normal code
 # push must not enqueue a fresh scan against an old checkpoint.
 on:
+  # Allow an explicit, auditable push to start a fresh repair chain; subsequent batches remain workflow_dispatch-driven.
+  push:
+    branches: [v1.2-factor-attribution]
+    paths:
+      - ".github/workflows/fluidq-targeted-price-repair.yml"
   workflow_dispatch:
     inputs:
       base_run_id:
