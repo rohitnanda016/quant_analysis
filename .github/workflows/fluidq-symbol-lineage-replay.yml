@@ -77,47 +77,62 @@ jobs:
                   print("No targeted repair run is visible yet; waiting.", flush=True)
                   time.sleep(30)
                   continue
-              run = max(runs, key=lambda r: r.get("run_number", 0))
-              run_id = run["id"]
-              if run_id != last_seen:
-                  print(f"Latest repair run #{run.get('run_number')} ID {run_id}: {run.get('status')}", flush=True)
-                  last_seen = run_id
+              runs = sorted(runs, key=lambda r: r.get("run_number", 0), reverse=True)
+              active_runs = [r for r in runs if r.get("status") != "completed"]
+              # Scan recent completed runs instead of trusting only the latest run:
+              # a failed readiness gate can leave the checkpoint artifact available
+              # even when the diagnostic artifact is the only one surfaced first.
+              for run in runs:
+                  if run.get("status") != "completed":
+                      continue
+                  run_id = run["id"]
+                  if run_id != last_seen:
+                      print(f"Inspecting repair run #{run.get('run_number')} ID {run_id}: "
+                            f"{run.get('conclusion')}", flush=True)
+                      last_seen = run_id
+                  artifacts_response = requests.get(
+                      f"{api}/actions/runs/{run_id}/artifacts",
+                      headers=headers, timeout=30
+                  )
+                  artifacts_response.raise_for_status()
+                  artifact = next((x for x in artifacts_response.json().get("artifacts", [])
+                                   if x.get("name") == f"fluidq-price-repair-checkpoint-{run_id}"
+                                   and not x.get("expired")), None)
+                  if not artifact:
+                      print(f"No checkpoint artifact exposed for completed run {run_id}; "
+                            "checking other recent repair runs.", flush=True)
+                      continue
+                  download = requests.get(artifact["archive_download_url"],
+                                          headers=headers, timeout=120)
+                  download.raise_for_status()
+                  with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+                      checkpoint_name = next((n for n in archive.namelist()
+                                               if n.endswith("bhavcopy_repair_checkpoint.json")), None)
+                      if not checkpoint_name:
+                          print(f"Checkpoint JSON missing in artifact for run {run_id}; "
+                                "checking another run.", flush=True)
+                          continue
+                      checkpoint = json.loads(archive.read(checkpoint_name))
+                  status = checkpoint.get("status")
+                  if status == "complete":
+                      with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                          output.write(f"run_id={run_id}\\n")
+                          output.write(f"checkpoint_status={status}\\n")
+                      print(f"Using complete checkpoint from run {run_id}; "
+                            f"{checkpoint.get('attempted_dates')} / {checkpoint.get('total_dates')} dates attempted; "
+                            f"{checkpoint.get('unresolved_absence_pairs')} absences remain for explicit audit.",
+                            flush=True)
+                      sys.exit(0)
+                  print(f"Repair run {run_id} checkpoint status is {status}; not eligible yet.", flush=True)
 
-              if run.get("status") != "completed":
+              if active_runs:
+                  print(f"{len(active_runs)} repair run(s) still active; waiting for a checkpoint.", flush=True)
                   time.sleep(30)
                   continue
-
-              artifacts_response = requests.get(f"{api}/actions/runs/{run_id}/artifacts",
-                                                headers=headers, timeout=30)
-              artifacts_response.raise_for_status()
-              artifact = next((x for x in artifacts_response.json().get("artifacts", [])
-                               if x.get("name") == f"fluidq-price-repair-checkpoint-{run_id}"
-                               and not x.get("expired")), None)
-              if not artifact:
-                  time.sleep(30)
-                  continue
-
-              download = requests.get(artifact["archive_download_url"], headers=headers, timeout=120)
-              download.raise_for_status()
-              with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
-                  checkpoint_name = next((n for n in archive.namelist()
-                                           if n.endswith("bhavcopy_repair_checkpoint.json")), None)
-                  if not checkpoint_name:
-                      raise RuntimeError(f"Checkpoint JSON missing in artifact for run {run_id}")
-                  checkpoint = json.loads(archive.read(checkpoint_name))
-              status = checkpoint.get("status")
-              if status == "complete":
-                  with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                      output.write(f"run_id={run_id}\n")
-                      output.write(f"checkpoint_status={status}\n")
-                  print(f"Using complete checkpoint from run {run_id}; "
-                        f"{checkpoint.get('attempted_dates')} / {checkpoint.get('total_dates')} dates attempted; "
-                        f"{checkpoint.get('unresolved_absence_pairs')} absences remain for explicit audit.", flush=True)
-                  sys.exit(0)
-
-              # If the last completed batch isn't final, allow its dispatch step
-              # to create the next run before polling again.
-              print(f"Run {run_id} checkpoint is {status}; waiting for the next batch.", flush=True)
+              # No complete checkpoint is currently visible. Keep polling briefly
+              # for artifact propagation / a follow-up batch, then fail with context
+              # rather than treating a missing artifact as a successful replay.
+              print("No complete checkpoint found in recent completed repair runs; waiting for a follow-up run or artifact propagation.", flush=True)
               time.sleep(30)
 
           raise TimeoutError("Repair chain did not publish a complete checkpoint within 150 minutes.")
