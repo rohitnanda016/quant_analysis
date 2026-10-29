@@ -8,12 +8,14 @@ on:
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/fluidq-quick-tests.yml"
+      - ".github/workflows/fluidq-symbol-lineage-replay.yml"
   pull_request:
     paths:
       - "scripts/**"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/fluidq-quick-tests.yml"
+      - ".github/workflows/fluidq-symbol-lineage-replay.yml"
   workflow_dispatch:
 
 permissions:
